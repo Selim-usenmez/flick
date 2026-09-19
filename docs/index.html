@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flick — Tes fenêtres et ton Dock au bout des doigts</title>
+<meta name="description" content="Flick range tes fenêtres, contrôle ton Dock et pilote tes apps d'un geste sur le trackpad, sans lâcher le clavier.">
+<link rel="icon" href="screenshots/icon.png">
+<style>
+  :root {
+    --bg: #0b0b0d;
+    --panel: #161619;
+    --panel-border: rgba(255,255,255,0.08);
+    --text: #f2f2f3;
+    --text-secondary: #9a9aa1;
+    --accent: #0a84ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+  nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 24px;
+    position: sticky;
+    top: 0;
+    background: rgba(11,11,13,0.8);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--panel-border);
+    z-index: 10;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 17px; }
+  .brand img { width: 28px; height: 28px; border-radius: 7px; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+    text-decoration: none;
+    padding: 12px 22px;
+    border-radius: 12px;
+    transition: transform 0.15s ease, opacity 0.15s ease;
+  }
+  .btn:hover { opacity: 0.88; }
+  .btn.small { padding: 8px 16px; font-size: 14px; border-radius: 10px; }
+
+  header.hero {
+    text-align: center;
+    padding: 96px 24px 64px;
+  }
+  header.hero img.icon {
+    width: 112px; height: 112px; border-radius: 24px;
+    box-shadow: 0 20px 60px rgba(10,132,255,0.25);
+    margin-bottom: 28px;
+  }
+  header.hero h1 {
+    font-size: 48px;
+    line-height: 1.1;
+    font-weight: 700;
+    margin: 0 0 18px;
+    letter-spacing: -0.02em;
+  }
+  header.hero p.subtitle {
+    font-size: 20px;
+    color: var(--text-secondary);
+    max-width: 560px;
+    margin: 0 auto 36px;
+    line-height: 1.5;
+  }
+  .hero-cta { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .hero-cta .btn { font-size: 17px; padding: 15px 32px; border-radius: 14px; }
+  .hero-cta .meta { font-size: 13px; color: var(--text-secondary); }
+
+  section.feature {
+    display: flex;
+    align-items: center;
+    gap: 64px;
+    padding: 72px 0;
+    border-top: 1px solid var(--panel-border);
+  }
+  section.feature:nth-of-type(even) { flex-direction: row-reverse; }
+  .feature-text { flex: 1; min-width: 260px; }
+  .feature-text .eyebrow {
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 10px;
+  }
+  .feature-text h2 { font-size: 30px; margin: 0 0 14px; letter-spacing: -0.01em; }
+  .feature-text p { font-size: 16px; color: var(--text-secondary); line-height: 1.6; margin: 0; }
+
+  .shot-frame {
+    flex: 1.2;
+    min-width: 280px;
+    border-radius: 16px;
+    background: #1c1c1e;
+    border: 1px solid var(--panel-border);
+    overflow: hidden;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.5);
+    position: relative;
+  }
+  .shot-frame .chrome {
+    height: 30px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 0 12px;
+    background: #232326;
+  }
+  .shot-frame .chrome span { width: 11px; height: 11px; border-radius: 50%; }
+  .shot-frame .chrome span:nth-child(1) { background: #ff5f57; }
+  .shot-frame .chrome span:nth-child(2) { background: #febc2e; }
+  .shot-frame .chrome span:nth-child(3) { background: #28c840; }
+  .shot-frame img { display: block; width: 100%; }
+
+  footer {
+    text-align: center;
+    padding: 64px 24px 48px;
+    color: var(--text-secondary);
+    font-size: 14px;
+    border-top: 1px solid var(--panel-border);
+  }
+  footer a { text-decoration: underline; }
+
+  @media (max-width: 720px) {
+    header.hero h1 { font-size: 34px; }
+    header.hero p.subtitle { font-size: 17px; }
+    section.feature, section.feature:nth-of-type(even) { flex-direction: column; gap: 32px; padding: 48px 0; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="brand"><img src="screenshots/icon.png" alt=""> Flick</div>
+  <a class="btn small" href="https://github.com/Selim-usenmez/flick/releases/latest/download/Flick.zip">Télécharger</a>
+</nav>
+
+<header class="hero">
+  <img class="icon" src="screenshots/icon.png" alt="Icône de Flick">
+  <h1>Tes fenêtres et ton Dock,<br>au bout des doigts.</h1>
+  <p class="subtitle">
+    Flick range tes fenêtres, contrôle ton Dock et pilote tes apps d'un geste sur le
+    trackpad — sans lâcher le clavier, sans toucher la souris.
+  </p>
+  <div class="hero-cta">
+    <a class="btn" href="https://github.com/Selim-usenmez/flick/releases/latest/download/Flick.zip">Télécharger Flick</a>
+    <span class="meta">macOS 13 ou plus récent · Gratuit</span>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <section class="feature">
+    <div class="feature-text">
+      <div class="eyebrow">Gestes</div>
+      <h2>Un geste, une action</h2>
+      <p>
+        Balaie depuis la barre de titre d'une fenêtre pour la ranger en un instant — moitié
+        d'écran, quart d'écran, plein écran. Depuis une icône du Dock, change de fenêtre,
+        minimise ou quitte une app sans jamais cliquer. Un panneau discret te montre en
+        temps réel où va ta fenêtre.
+      </p>
+    </div>
+    <div class="shot-frame">
+      <div class="chrome"><span></span><span></span><span></span></div>
+      <img src="screenshots/hud.png" alt="Panneau de contrôle en direct de Flick, avec le résumé des gestes">
+    </div>
+  </section>
+
+  <section class="feature">
+    <div class="feature-text">
+      <div class="eyebrow">Réglages</div>
+      <h2>Réglé à ta main</h2>
+      <p>
+        Ajuste la sensibilité du balayage, le seuil du pincement et la tolérance
+        diagonale — pas besoin d'un geste parfaitement droit pour que Flick comprenne
+        ce que tu veux faire. Inverse les axes si les directions te semblent à l'envers.
+      </p>
+    </div>
+    <div class="shot-frame">
+      <div class="chrome"><span></span><span></span><span></span></div>
+      <img src="screenshots/gestures.png" alt="Réglages de sensibilité des gestes dans les Préférences de Flick">
+    </div>
+  </section>
+
+  <section class="feature">
+    <div class="feature-text">
+      <div class="eyebrow">Toujours prêt</div>
+      <h2>Installe-le et oublie-le</h2>
+      <p>
+        Lance Flick automatiquement à chaque démarrage du Mac. Les mises à jour arrivent
+        seules — signées et vérifiées, jamais de réinstallation manuelle.
+      </p>
+    </div>
+    <div class="shot-frame">
+      <div class="chrome"><span></span><span></span><span></span></div>
+      <img src="screenshots/preferences.png" alt="Onglet Général des Préférences de Flick, avec le lancement au démarrage">
+    </div>
+  </section>
+
+  <section class="feature">
+    <div class="feature-text">
+      <div class="eyebrow">Prise en main</div>
+      <h2>Compris en trente secondes</h2>
+      <p>
+        Une courte présentation au premier lancement montre l'essentiel — la carte des
+        gestes, le démarrage automatique, et l'autorisation nécessaire pour que tout
+        fonctionne.
+      </p>
+    </div>
+    <div class="shot-frame">
+      <div class="chrome"><span></span><span></span><span></span></div>
+      <img src="screenshots/welcome.png" alt="Écran de bienvenue de Flick au premier lancement">
+    </div>
+  </section>
+
+</div>
+
+<footer>
+  <p>
+    Flick est gratuit et open-source.
+    <a href="https://github.com/Selim-usenmez/flick">Code source sur GitHub</a>
+  </p>
+</footer>
+
+</body>
+</html>
