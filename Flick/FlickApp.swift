@@ -9,5 +9,10 @@ struct FlickApp: App {
             MenuBarView(controller: controller)
         }
         .menuBarExtraStyle(.menu)
+
+        Window("Réglages Flick", id: PreferencesView.windowID) {
+            PreferencesView(controller: controller)
+        }
+        .windowResizability(.contentSize)
     }
 }

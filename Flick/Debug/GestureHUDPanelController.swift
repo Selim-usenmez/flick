@@ -6,9 +6,11 @@ import SwiftUI
 final class GestureHUDPanelController {
     private var panel: NSPanel?
     private let monitor: TouchGestureMonitor
+    private let activityLog: GestureActivityLog
 
-    init(monitor: TouchGestureMonitor) {
+    init(monitor: TouchGestureMonitor, activityLog: GestureActivityLog) {
         self.monitor = monitor
+        self.activityLog = activityLog
     }
 
     var isVisible: Bool { panel != nil }
@@ -16,8 +18,15 @@ final class GestureHUDPanelController {
     func show() {
         guard panel == nil else { return }
 
-        let hostingView = NSHostingView(rootView: GestureHUDView(monitor: monitor))
-        hostingView.frame = NSRect(x: 0, y: 0, width: 240, height: 170)
+        let hostingView = NSHostingView(
+            rootView: GestureHUDView(monitor: monitor, activityLog: activityLog)
+        )
+        hostingView.frame = NSRect(x: 0, y: 0, width: 640, height: 440)
+        // The live diagnostic text in this panel updates at gesture-frame frequency during
+        // a pinch; without this, NSHostingView's own auto-sizing (triggered by content
+        // changes, not just frame changes) can trip the same "too many Update Constraints"
+        // fault seen on the preview panels.
+        hostingView.sizingOptions = []
 
         let panel = NSPanel(
             contentRect: hostingView.frame,
@@ -26,14 +35,14 @@ final class GestureHUDPanelController {
             defer: false
         )
         panel.contentView = hostingView
-        panel.title = "Flick — Debug"
+        panel.title = "Flick"
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary]
         panel.isMovableByWindowBackground = true
         panel.hidesOnDeactivate = false
 
         if let screenFrame = NSScreen.main?.visibleFrame {
-            let origin = NSPoint(x: screenFrame.maxX - 260, y: screenFrame.minY + 20)
+            let origin = NSPoint(x: screenFrame.maxX - 660, y: screenFrame.minY + 20)
             panel.setFrameOrigin(origin)
         }
 

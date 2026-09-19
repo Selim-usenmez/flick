@@ -8,6 +8,11 @@ import Observation
 final class AccessibilityPermission {
     private(set) var isTrusted: Bool = AXIsProcessTrusted()
 
+    /// Fired whenever `isTrusted` changes, including the poll picking up a grant made in
+    /// System Settings after launch — callers that only check `isTrusted` once at init
+    /// (to auto-enable) would otherwise miss that later transition.
+    var onTrustedChange: ((Bool) -> Void)?
+
     private var pollTimer: Timer?
 
     init() {
@@ -18,7 +23,7 @@ final class AccessibilityPermission {
     /// only shows the prompt once per app until the user responds.
     func requestAuthorization() {
         let options: [String: Any] = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
-        isTrusted = AXIsProcessTrustedWithOptions(options as CFDictionary)
+        setTrusted(AXIsProcessTrustedWithOptions(options as CFDictionary))
     }
 
     func openSystemSettings() {
@@ -29,11 +34,14 @@ final class AccessibilityPermission {
     private func startPolling() {
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self else { return }
-            let trusted = AXIsProcessTrusted()
-            if trusted != self.isTrusted {
-                self.isTrusted = trusted
-            }
+            setTrusted(AXIsProcessTrusted())
         }
+    }
+
+    private func setTrusted(_ trusted: Bool) {
+        guard trusted != isTrusted else { return }
+        isTrusted = trusted
+        onTrustedChange?(trusted)
     }
 
     deinit {
