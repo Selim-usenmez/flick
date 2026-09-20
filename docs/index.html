@@ -236,12 +236,33 @@
     Flick est gratuit et open-source.
     <a href="https://github.com/Selim-usenmez/flick">Code source sur GitHub</a>
   </p>
+  <p>
+    <a href="legal.html#mentions-legales">Mentions légales</a> ·
+    <a href="legal.html#confidentialite">Confidentialité</a> ·
+    <a href="legal.html#cgu">Conditions d'utilisation</a>
+  </p>
 </footer>
+
+<div id="privacy-banner" style="display:none; position:fixed; left:16px; right:16px; bottom:16px; z-index:20; max-width:640px; margin:0 auto; background:#1c1c1e; border:1px solid rgba(255,255,255,0.1); border-radius:14px; padding:16px 20px; font-size:14px; color:#9a9aa1; box-shadow:0 20px 60px rgba(0,0,0,0.5);">
+  Ce site n'utilise aucun cookie. Seules des statistiques de visite anonymes et
+  sans identifiant personnel sont collectées (Vercel Analytics).
+  <a href="legal.html#confidentialite" style="color:#0a84ff;">En savoir plus</a>
+  <button id="privacy-banner-dismiss" style="margin-left:12px; background:#0a84ff; color:#fff; border:none; border-radius:8px; padding:6px 14px; font-size:13px; font-weight:600; cursor:pointer;">J'ai compris</button>
+</div>
 
 <script>
   window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
 </script>
 <script defer src="/_vercel/insights/script.js"></script>
+<script>
+  if (!localStorage.getItem('flick-privacy-notice-dismissed')) {
+    document.getElementById('privacy-banner').style.display = 'block';
+  }
+  document.getElementById('privacy-banner-dismiss').addEventListener('click', function () {
+    localStorage.setItem('flick-privacy-notice-dismissed', '1');
+    document.getElementById('privacy-banner').style.display = 'none';
+  });
+</script>
 
 </body>
 </html>
