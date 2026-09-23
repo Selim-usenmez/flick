@@ -120,11 +120,11 @@ final class FlickController {
     // MARK: - Live preview
 
     private func updatePreview(for stroke: GestureStroke) {
-        // The panel repositioning below (`show(frame:)`) is cheap and already a no-op when
-        // the frame hasn't changed, so it runs at raw gesture-update rate for a fluid,
-        // finger-tracking preview. Only the HUD's text (`activityLog.updateLive`, routed
-        // through `updateLiveThrottled`) needs throttling — that's the SwiftUI relayout that
-        // was actually causing the "too many Update Constraints" crash.
+        // The panel repositioning below (`show`) is cheap and already a no-op when nothing
+        // changed, so it runs at raw gesture-update rate for a fluid, finger-tracking
+        // preview. Only the HUD's text (`activityLog.updateLive`, routed through
+        // `updateLiveThrottled`) needs throttling — that's the SwiftUI relayout that was
+        // actually causing the "too many Update Constraints" crash.
         switch activeGestureTarget {
         case .window(let located):
             updateWindowPreview(stroke: stroke, located: located)
@@ -152,11 +152,11 @@ final class FlickController {
             return
         }
         updateLiveThrottled(target: "Fenêtre", classification: "\(action.description) — \(magnitude)")
-        guard let quartzFrame = WindowSnapper.previewFrame(for: action, in: located) else {
+        guard let region = WindowSnapper.normalizedRegion(for: action) else {
             snapPreviewController.hide()
             return
         }
-        snapPreviewController.show(frame: ScreenGeometry.appKitRect(fromQuartz: quartzFrame))
+        snapPreviewController.show(region: region, near: NSEvent.mouseLocation)
     }
 
     private func updateDockPreview(stroke: GestureStroke, item: DockItemLocator.Located) {
@@ -170,9 +170,9 @@ final class FlickController {
         }
         let isRunning = AppLifecycleController.isRunning(item)
         updateLiveThrottled(target: targetDescription, classification: "\(action.description(isRunning: isRunning)) — \(magnitude)")
-        let pill = pillContent(for: action, item: item)
+        let icon = dockPreviewIcon(for: action, item: item)
         dockActionPreviewController.show(
-            systemImage: pill.image, text: pill.text, tint: pill.tint,
+            systemImage: icon.image, tint: icon.tint,
             above: ScreenGeometry.appKitRect(fromQuartz: item.frame)
         )
     }
@@ -250,33 +250,26 @@ final class FlickController {
         return "\(subject) → \(actionDescription) — échec (\(failure))"
     }
 
-    // MARK: - Dock pill content
+    // MARK: - Dock action icon
 
-    private func pillContent(for action: DockAction, item: DockItemLocator.Located) -> (image: String, text: String, tint: Color) {
-        let name = item.displayName.isEmpty ? nil : item.displayName
+    /// Big colored circle + glyph, mirroring macOS's own traffic-light icons (×, −, ⤢)
+    /// instead of a text pill.
+    private func dockPreviewIcon(for action: DockAction, item: DockItemLocator.Located) -> (image: String, tint: Color) {
         let isRunning = AppLifecycleController.isRunning(item)
-
-        func label(_ text: String) -> String {
-            [name, text].compactMap { $0 }.joined(separator: " — ")
-        }
 
         switch action {
         case .quit:
-            return ("xmark.circle.fill", label("Quitter"), .red)
+            return ("xmark", .red)
         case .newWindow:
-            return isRunning
-                ? ("plus.square.fill", label("Nouvelle fenêtre"), .accentColor)
-                : ("questionmark.circle.fill", label("App non lancée"), .secondary)
+            return isRunning ? ("arrow.up.left.and.arrow.down.right", .green) : ("questionmark", .secondary)
         case .minimizeFrontmost:
-            return ("minus.circle.fill", label("Minimiser"), .yellow)
+            return ("minus", .yellow)
         case .unminimize:
-            return isRunning
-                ? ("plus.circle.fill", label("Désminimiser"), .yellow)
-                : ("questionmark.circle.fill", label("App non lancée"), .secondary)
+            return isRunning ? ("plus", .yellow) : ("questionmark", .secondary)
         case .cycleNext:
-            return ("arrow.right.circle.fill", label("Fenêtre suivante"), .accentColor)
+            return ("arrow.right", .accentColor)
         case .cyclePrevious:
-            return ("arrow.left.circle.fill", label("Fenêtre précédente"), .accentColor)
+            return ("arrow.left", .accentColor)
         }
     }
 }
