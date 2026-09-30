@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct AboutTab: View {
@@ -11,9 +12,9 @@ struct AboutTab: View {
     var body: some View {
         VStack(spacing: 16) {
             Spacer()
-            Image(systemName: "macwindow.on.rectangle")
-                .font(.system(size: 56))
-                .foregroundStyle(.tint)
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 64, height: 64)
             VStack(spacing: 4) {
                 Text("Flick").font(.title2.weight(.semibold))
                 Text("Version \(version) (\(build))")

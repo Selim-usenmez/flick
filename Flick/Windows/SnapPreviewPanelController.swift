@@ -18,72 +18,64 @@ final class SnapPreviewPanelController {
     ///   - region: target snap region as a fraction (0...1) of the screen, top-left origin.
     ///   - cursor: current cursor position, in AppKit screen coordinates (e.g.
     ///     `NSEvent.mouseLocation`).
+    /// Synchronous by design — see `DockActionPreviewPanelController.show`'s doc comment:
+    /// the caller (`FlickController`'s single coalesced preview dispatcher) already
+    /// guarantees a fresh run-loop turn shared atomically with every other preview panel's
+    /// `hide`/`show` decision for that same tick.
     func show(region: CGRect, near cursor: NSPoint) {
-        // Deferred a full run-loop turn — see `DockActionPreviewPanelController.show` for
-        // why: reassigning `hostingView.rootView` (or any panel frame/order change)
-        // synchronously, nested inside an AppKit display-cycle pass already underway, is
-        // what causes the "needing another Update Constraints" fault this app has hit
-        // before. `DispatchQueue.main.async` from the main thread preserves call order
-        // relative to other `show`/`hide` calls, so the no-op checks below still see
-        // consistent state.
-        DispatchQueue.main.async { [self] in
-            let frame = Self.panelFrame(near: cursor)
+        let frame = Self.panelFrame(near: cursor)
 
-            if let panel, let hostingView {
-                // Multitouch/scroll-driven updates can arrive 60-120×/second — every call
-                // here is a strict no-op unless something actually changed, for the same
-                // "don't flood the display cycle" reason as the Dock pill panel.
-                if region != lastRegion {
-                    lastRegion = region
-                    hostingView.rootView = SnapPreviewView(region: region)
-                }
-                if frame != lastFrame {
-                    lastFrame = frame
-                    panel.setFrame(frame, display: false)
-                }
-                if !isVisible {
-                    isVisible = true
-                    panel.orderFrontRegardless()
-                }
-                return
+        if let panel, let hostingView {
+            // Multitouch/scroll-driven updates can arrive 60-120×/second — every call
+            // here is a strict no-op unless something actually changed, for the same
+            // "don't flood the display cycle" reason as the Dock pill panel.
+            if region != lastRegion {
+                lastRegion = region
+                hostingView.rootView = SnapPreviewView(region: region)
             }
-
-            lastFrame = frame
-            lastRegion = region
-            isVisible = true
-
-            let hostingView = NSHostingView(rootView: SnapPreviewView(region: region))
-            // Without this, NSHostingView tries to auto-size the panel to its SwiftUI
-            // content's ideal size, fighting our explicit `setFrame` calls above.
-            hostingView.sizingOptions = []
-            let panel = NSPanel(
-                contentRect: frame,
-                styleMask: [.borderless, .nonactivatingPanel],
-                backing: .buffered,
-                defer: false
-            )
-            panel.isOpaque = false
-            panel.backgroundColor = .clear
-            // The mini-screen draws its own shadow (see `SnapPreviewView`).
-            panel.hasShadow = false
-            panel.level = .floating
-            panel.ignoresMouseEvents = true
-            panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
-            panel.contentView = hostingView
-            panel.orderFrontRegardless()
-            self.panel = panel
-            self.hostingView = hostingView
+            if frame != lastFrame {
+                lastFrame = frame
+                panel.setFrame(frame, display: false)
+            }
+            if !isVisible {
+                isVisible = true
+                panel.orderFrontRegardless()
+            }
+            return
         }
+
+        lastFrame = frame
+        lastRegion = region
+        isVisible = true
+
+        let hostingView = NSHostingView(rootView: SnapPreviewView(region: region))
+        // Without this, NSHostingView tries to auto-size the panel to its SwiftUI
+        // content's ideal size, fighting our explicit `setFrame` calls above.
+        hostingView.sizingOptions = []
+        let panel = NSPanel(
+            contentRect: frame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        // The mini-screen draws its own shadow (see `SnapPreviewView`).
+        panel.hasShadow = false
+        panel.level = .floating
+        panel.ignoresMouseEvents = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        panel.contentView = hostingView
+        panel.orderFrontRegardless()
+        self.panel = panel
+        self.hostingView = hostingView
     }
 
+    /// See `show`'s doc comment — synchronous for the same reason.
     func hide() {
-        // See the comment in `show` — deferred for the same re-entrancy reason, and to
-        // keep ordering consistent with `show`'s own deferred calls.
-        DispatchQueue.main.async { [self] in
-            guard isVisible else { return }
-            isVisible = false
-            panel?.orderOut(nil)
-        }
+        guard isVisible else { return }
+        isVisible = false
+        panel?.orderOut(nil)
     }
 
     /// Positions the preview to the right of the cursor, flipping to the left if that

@@ -21,7 +21,7 @@ final class GestureHUDPanelController {
         let hostingView = NSHostingView(
             rootView: GestureHUDView(monitor: monitor, activityLog: activityLog)
         )
-        hostingView.frame = NSRect(x: 0, y: 0, width: 640, height: 440)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 640, height: 490)
         // The live diagnostic text in this panel updates at gesture-frame frequency during
         // a pinch; without this, NSHostingView's own auto-sizing (triggered by content
         // changes, not just frame changes) can trip the same "too many Update Constraints"

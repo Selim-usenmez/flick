@@ -22,75 +22,68 @@ final class WindowActionBadgePanelController {
     )
     private static let cursorGap: CGFloat = 20
 
+    /// Synchronous by design — see `DockActionPreviewPanelController.show`'s doc comment:
+    /// the caller (`FlickController`'s single coalesced preview dispatcher) already
+    /// guarantees a fresh run-loop turn shared atomically with every other preview panel's
+    /// `hide`/`show` decision for that same tick.
+    ///
     /// - Parameter cursor: current cursor position, in AppKit screen coordinates (e.g.
     ///   `NSEvent.mouseLocation`).
     func show(glyph: ActionBadgeView.Glyph, near cursor: NSPoint) {
-        // Deferred a full run-loop turn — see `DockActionPreviewPanelController.show` for
-        // why: reassigning `hostingView.rootView` (or any panel frame/order change)
-        // synchronously, nested inside an AppKit display-cycle pass already underway, is
-        // what causes the "needing another Update Constraints" fault this app has hit
-        // before. `DispatchQueue.main.async` from the main thread preserves call order
-        // relative to other `show`/`hide` calls, so the no-op checks below still see
-        // consistent state.
-        DispatchQueue.main.async { [self] in
-            let frame = Self.panelFrame(near: cursor)
+        let frame = Self.panelFrame(near: cursor)
 
-            if let panel, let hostingView {
-                // Multitouch-driven updates can arrive 60-120×/second — every call here
-                // is a strict no-op unless something actually changed, for the same
-                // "don't flood the display cycle" reason as the other preview panels.
-                if glyph != lastGlyph {
-                    lastGlyph = glyph
-                    hostingView.rootView = ActionBadgeView(glyph: glyph)
-                }
-                if frame != lastFrame {
-                    lastFrame = frame
-                    panel.setFrame(frame, display: false)
-                }
-                if !isVisible {
-                    isVisible = true
-                    fadeIn(panel)
-                }
-                return
+        if let panel, let hostingView {
+            // Multitouch-driven updates can arrive 60-120×/second — every call here
+            // is a strict no-op unless something actually changed, for the same
+            // "don't flood the display cycle" reason as the other preview panels.
+            if glyph != lastGlyph {
+                lastGlyph = glyph
+                hostingView.rootView = ActionBadgeView(glyph: glyph)
             }
-
-            lastFrame = frame
-            lastGlyph = glyph
-            isVisible = true
-
-            let hostingView = NSHostingView(rootView: ActionBadgeView(glyph: glyph))
-            // Without this, NSHostingView tries to auto-size the panel to its SwiftUI
-            // content's ideal size, fighting our explicit `setFrame` calls above.
-            hostingView.sizingOptions = []
-            let panel = NSPanel(
-                contentRect: frame,
-                styleMask: [.borderless, .nonactivatingPanel],
-                backing: .buffered,
-                defer: false
-            )
-            panel.isOpaque = false
-            panel.backgroundColor = .clear
-            // The badge draws its own shadow (see `ActionBadgeView`); a second,
-            // AppKit-layer window shadow on top of that just looks like a smudge.
-            panel.hasShadow = false
-            panel.level = .floating
-            panel.ignoresMouseEvents = true
-            panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
-            panel.contentView = hostingView
-            fadeIn(panel)
-            self.panel = panel
-            self.hostingView = hostingView
+            if frame != lastFrame {
+                lastFrame = frame
+                panel.setFrame(frame, display: false)
+            }
+            if !isVisible {
+                isVisible = true
+                panel.orderFrontRegardless()
+            }
+            return
         }
+
+        lastFrame = frame
+        lastGlyph = glyph
+        isVisible = true
+
+        let hostingView = NSHostingView(rootView: ActionBadgeView(glyph: glyph))
+        // Without this, NSHostingView tries to auto-size the panel to its SwiftUI
+        // content's ideal size, fighting our explicit `setFrame` calls above.
+        hostingView.sizingOptions = []
+        let panel = NSPanel(
+            contentRect: frame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        // The badge draws its own shadow (see `ActionBadgeView`); a second,
+        // AppKit-layer window shadow on top of that just looks like a smudge.
+        panel.hasShadow = false
+        panel.level = .floating
+        panel.ignoresMouseEvents = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        panel.contentView = hostingView
+        panel.orderFrontRegardless()
+        self.panel = panel
+        self.hostingView = hostingView
     }
 
+    /// See `show`'s doc comment — synchronous for the same reason.
     func hide() {
-        // See the comment in `show` — deferred for the same re-entrancy reason, and to
-        // keep ordering consistent with `show`'s own deferred calls.
-        DispatchQueue.main.async { [self] in
-            guard isVisible else { return }
-            isVisible = false
-            panel?.orderOut(nil)
-        }
+        guard isVisible else { return }
+        isVisible = false
+        panel?.orderOut(nil)
     }
 
     /// Positions the badge to the right of the cursor, flipping to the left if that would
@@ -104,16 +97,5 @@ final class WindowActionBadgePanelController {
         }
         origin.y = min(max(origin.y, screenFrame.minY), screenFrame.maxY - size.height)
         return NSRect(origin: origin, size: size)
-    }
-
-    /// A quick, subtle fade-in so the badge doesn't just pop into existence — order-in is
-    /// one-directional and never races `hide()`'s (unanimated, immediate) `orderOut`.
-    private func fadeIn(_ panel: NSPanel) {
-        panel.alphaValue = 0
-        panel.orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.12
-            panel.animator().alphaValue = 1
-        }
     }
 }

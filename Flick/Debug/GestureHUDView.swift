@@ -41,9 +41,9 @@ struct GestureHUDView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: "macwindow.on.rectangle")
-                .font(.title2)
-                .foregroundStyle(.tint)
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 22, height: 22)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Flick").font(.headline)
                 statusPill(isOn: monitor.isMonitoring, onLabel: "Surveillance active", offLabel: "Surveillance arrêtée")

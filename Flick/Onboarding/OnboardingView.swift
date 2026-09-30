@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// First-launch welcome tour: what Flick does, the gesture map, and the two things it needs
@@ -72,9 +73,9 @@ struct OnboardingView: View {
 
     private var welcomePage: some View {
         VStack(spacing: 16) {
-            Image(systemName: "macwindow.on.rectangle")
-                .font(.system(size: 64))
-                .foregroundStyle(.tint)
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 96, height: 96)
             Text("Bienvenue sur Flick")
                 .font(.largeTitle.weight(.bold))
             Text("Range tes fenêtres, contrôle le Dock et pilote tes apps d'un geste sur le trackpad — sans lâcher le clavier.")
@@ -138,7 +139,16 @@ struct OnboardingView: View {
                 Button("Autoriser l'accessibilité…") {
                     controller.accessibilityPermission.requestAuthorization()
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                // macOS only shows the system prompt once — if it was already dismissed
+                // or denied, this is the only way back in without hunting for the panel.
+                Button("Ouvrir Réglages Système…") {
+                    controller.accessibilityPermission.openSystemSettings()
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .font(.callout)
             }
         }
     }

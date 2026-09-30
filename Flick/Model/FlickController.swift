@@ -54,6 +54,23 @@ final class FlickController {
     /// stays at raw gesture rate for a fluid, finger-tracking preview.
     @ObservationIgnored
     private var lastPreviewUpdateTime: CFAbsoluteTime = 0
+    /// The one deferred preview decision currently in flight, if any — see
+    /// `schedulePreviewUpdate`.
+    @ObservationIgnored
+    private var pendingPreviewUpdate: (() -> Void)?
+    @ObservationIgnored
+    private var hasScheduledPreviewUpdate = false
+    /// The magnify stroke's stabilized open/closed reading for the current gesture — see
+    /// `stableIsOpen`. Reset at the start of every gesture.
+    @ObservationIgnored
+    private var stableMagnifyIsOpen: Bool?
+    /// How much further past the ordinary commit threshold a magnify stroke has to swing,
+    /// in the *opposite* direction, before the shown/applied direction flips away from
+    /// whichever one is already stable. Without this, a small, imprecise back-and-forth
+    /// in raw inter-finger distance — e.g. drawing little circles instead of a clean
+    /// pinch — re-crosses the plain threshold on both sides constantly, and the preview
+    /// badge flickers between maximize/close (or newWindow/minimize) on every wobble.
+    private static let magnifyFlipMultiplier: CGFloat = 1.75
     // 1/30s wasn't conservative enough in practice — a sustained gesture (e.g. holding a
     // Dock quit swipe) still hit the same "too many Update Constraints" crash this is meant
     // to prevent. 1/8s matches TouchGestureMonitor.diagnosticFlushInterval, the rate that's
@@ -71,12 +88,13 @@ final class FlickController {
             self?.handleStrokeEnded(stroke)
         }
 
-        // Show the control panel right away and turn gestures on immediately if
-        // accessibility is already granted, so launching the app is enough to start using
-        // it — no hunting through the menu bar first. Permission is often granted only
-        // after launch (the normal flow: launch, then check the box in System Settings),
-        // so the same auto-enable has to also happen on that later transition, not just here.
-        hudPanelController.show()
+        // Turn gestures on immediately if accessibility is already granted, so launching
+        // the app is enough to start using it — no hunting through the menu bar first.
+        // Permission is often granted only after launch (the normal flow: launch, then
+        // check the box in System Settings), so the same auto-enable has to also happen
+        // on that later transition, not just here. The debug HUD panel is deliberately
+        // *not* shown here — it only appears when explicitly toggled (menu bar or
+        // Preferences), never uninvited on launch.
         if accessibilityPermission.isTrusted {
             setEnabled(true)
         }
@@ -110,12 +128,54 @@ final class FlickController {
     /// A window's title bar takes priority over a Dock icon in the unlikely case both
     /// somehow overlap at the gesture's starting point.
     private func resolveGestureTarget(at location: NSPoint) {
+        stableMagnifyIsOpen = nil
         if let window = WindowLocator.window(atTitleBar: location) {
             activeGestureTarget = .window(window)
         } else if let dockItem = DockItemLocator.item(at: location) {
             activeGestureTarget = .dockItem(dockItem)
         } else {
             activeGestureTarget = nil
+        }
+    }
+
+    /// The magnify stroke's open/closed reading, stabilized against small wobble — see
+    /// `magnifyFlipMultiplier`. `nil` below the ordinary commit threshold, same as the
+    /// raw check in `GestureClassifier`/`DockGestureClassifier`. Both the live preview and
+    /// the action actually applied at release go through this (via `windowAction`/
+    /// `dockAction` below), so they always agree, even mid-wobble.
+    private func stableIsOpen(for stroke: GestureStroke) -> Bool? {
+        let magnitude = stroke.magnification
+        guard abs(magnitude) >= gestureSettings.pinchThreshold else { return nil }
+        let rawIsOpen = (magnitude > 0) != gestureSettings.invertPinch
+
+        if let stable = stableMagnifyIsOpen, stable != rawIsOpen {
+            guard abs(magnitude) >= gestureSettings.pinchThreshold * Self.magnifyFlipMultiplier else {
+                return stable
+            }
+        }
+        stableMagnifyIsOpen = rawIsOpen
+        return rawIsOpen
+    }
+
+    /// `GestureClassifier.action`, but routed through `stableIsOpen` for magnify strokes
+    /// instead of its own raw zero-crossing check.
+    private func windowAction(for stroke: GestureStroke) -> SnapAction? {
+        switch stroke.kind {
+        case .magnify:
+            return stableIsOpen(for: stroke).map { $0 ? .maximize : .close }
+        case .translation:
+            return GestureClassifier.action(for: stroke, settings: gestureSettings)
+        }
+    }
+
+    /// `DockGestureClassifier.action`, but routed through `stableIsOpen` for magnify
+    /// strokes instead of its own raw zero-crossing check.
+    private func dockAction(for stroke: GestureStroke) -> DockAction? {
+        switch stroke.kind {
+        case .magnify:
+            return stableIsOpen(for: stroke).map { $0 ? .newWindow : .minimizeFrontmost }
+        case .translation:
+            return DockGestureClassifier.action(for: stroke, settings: gestureSettings)
         }
     }
 
@@ -127,14 +187,42 @@ final class FlickController {
         // preview. Only the HUD's text (`activityLog.updateLive`, routed through
         // `updateLiveThrottled`) needs throttling — that's the SwiftUI relayout that was
         // actually causing the "too many Update Constraints" crash.
-        switch activeGestureTarget {
-        case .window(let located):
-            updateWindowPreview(stroke: stroke, located: located)
-        case .dockItem(let item):
-            updateDockPreview(stroke: stroke, item: item)
-        case nil:
-            hideAllPreviews()
-            updateLiveThrottled(target: "Aucune (ni barre de titre, ni Dock)", classification: "—")
+        //
+        // The whole decision below is wrapped in `schedulePreviewUpdate` rather than run
+        // directly: multitouch/scroll updates can arrive up to 120×/second, and under a
+        // fast gesture, three *independently* deferred panels (Dock badge, window badge,
+        // snap rectangle) could each drain their own backlog in a different order —
+        // occasionally landing two of them visible at once, since whichever panel still
+        // had older queued work could show *after* another panel's fresher "hide". Making
+        // this one decision — which single panel (if any) should be visible right now —
+        // and deferring it as a single unit keeps that decision atomic: exactly one
+        // outcome ever applies, and a burst of calls collapses to just the latest one.
+        schedulePreviewUpdate { [self] in
+            switch activeGestureTarget {
+            case .window(let located):
+                updateWindowPreview(stroke: stroke, located: located)
+            case .dockItem(let item):
+                updateDockPreview(stroke: stroke, item: item)
+            case nil:
+                hideAllPreviews()
+                updateLiveThrottled(target: "Aucune (ni barre de titre, ni Dock)", classification: "—")
+            }
+        }
+    }
+
+    /// Defers `work` by one run-loop turn (matching the AppKit re-entrancy guard the
+    /// panel controllers used to each implement individually), but keeps only the
+    /// *latest* pending call instead of queuing every single one — see the comment in
+    /// `updatePreview` for why a per-panel version of this let two panels show at once.
+    private func schedulePreviewUpdate(_ work: @escaping () -> Void) {
+        pendingPreviewUpdate = work
+        guard !hasScheduledPreviewUpdate else { return }
+        hasScheduledPreviewUpdate = true
+        DispatchQueue.main.async { [self] in
+            hasScheduledPreviewUpdate = false
+            let work = pendingPreviewUpdate
+            pendingPreviewUpdate = nil
+            work?()
         }
     }
 
@@ -148,7 +236,7 @@ final class FlickController {
     private func updateWindowPreview(stroke: GestureStroke, located: WindowLocator.Located) {
         dockActionPreviewController.hide()
         let magnitude = magnitudeDescription(for: stroke)
-        guard let action = GestureClassifier.action(for: stroke, settings: gestureSettings) else {
+        guard let action = windowAction(for: stroke) else {
             snapPreviewController.hide()
             windowActionBadgeController.hide()
             updateLiveThrottled(target: "Fenêtre", classification: "aucune action — \(magnitude)")
@@ -194,7 +282,7 @@ final class FlickController {
         }
 
         let targetDescription = "Dock : \(item.displayName.isEmpty ? "?" : item.displayName)"
-        guard let action = DockGestureClassifier.action(for: stroke, settings: gestureSettings) else {
+        guard let action = dockAction(for: stroke) else {
             dockActionPreviewController.hide()
             updateLiveThrottled(target: targetDescription, classification: "aucune action — \(magnitude)")
             return
@@ -214,7 +302,7 @@ final class FlickController {
     /// windows...) can be driven reliably from here.
     private func updateMinimizedWindowPreview(stroke: GestureStroke, item: DockItemLocator.Located, magnitude: String) {
         let targetDescription = "Fenêtre réduite : \(item.displayName.isEmpty ? "?" : item.displayName)"
-        guard DockGestureClassifier.action(for: stroke, settings: gestureSettings) == .unminimize else {
+        guard dockAction(for: stroke) == .unminimize else {
             dockActionPreviewController.hide()
             updateLiveThrottled(target: targetDescription, classification: "aucune action — \(magnitude)")
             return
@@ -265,7 +353,7 @@ final class FlickController {
     }
 
     private func applyWindowAction(stroke: GestureStroke, located: WindowLocator.Located) {
-        guard let action = GestureClassifier.action(for: stroke, settings: gestureSettings) else {
+        guard let action = windowAction(for: stroke) else {
             activityLog.record("Geste ignoré (trop court)")
             return
         }
@@ -279,7 +367,7 @@ final class FlickController {
     }
 
     private func applyDockAction(stroke: GestureStroke, item: DockItemLocator.Located) {
-        guard let action = DockGestureClassifier.action(for: stroke, settings: gestureSettings) else {
+        guard let action = dockAction(for: stroke) else {
             activityLog.record("Geste ignoré (trop court)")
             return
         }
