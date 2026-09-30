@@ -12,6 +12,15 @@ import ApplicationServices
 /// background queue — those are the ones that can actually hang if the target app is slow
 /// to respond to an Accessibility query, which would otherwise freeze Flick's own UI.
 struct AppLifecycleController {
+    /// Serial, not concurrent: a rapid sequence of Dock gestures on the same app (e.g.
+    /// cycling forward twice in quick succession) must have each `AXUIElement` round-trip
+    /// fully land — including the focus change it causes — before the next one reads
+    /// state like the currently-focused window. On the previous concurrent queue, two
+    /// overlapping `cycle` calls could both read the *same* stale focused window and
+    /// advance to the same next window instead of two windows forward, a swipe silently
+    /// "eaten" by the one racing ahead of it.
+    private static let axQueue = DispatchQueue(label: "com.flick.applifecycle.ax")
+
     /// `nil` on success, else a short reason — surfaced in the control panel's activity
     /// log. Delivered on the main thread regardless of which path handled `action`.
     static func apply(_ action: DockAction, to item: DockItemLocator.Located, completion: @escaping (String?) -> Void = { _ in }) {
@@ -33,6 +42,19 @@ struct AppLifecycleController {
 
     static func isRunning(_ item: DockItemLocator.Located) -> Bool {
         runningApplication(for: item) != nil
+    }
+
+    /// Restores a minimized window directly from its Dock thumbnail (`item.kind ==
+    /// .minimizedWindow`) — the exact same `AXPress` a real click on that thumbnail sends.
+    /// Unlike every other action here, this can't resolve an owning `NSRunningApplication`
+    /// first: minimized-window Dock items expose no `AXURL`, and their `AXTopLevelUIElement`
+    /// resolves to the Dock process itself, not the window's app (see `DockItemLocator.Kind`).
+    /// Pressing the Dock's own proxy element is the only reliable way to target this exact
+    /// window, so this is main-thread-only, like the other `NSWorkspace`-free actions above.
+    static func restore(_ item: DockItemLocator.Located) -> String? {
+        AXUIElementPerformAction(item.axItem, kAXPressAction as CFString) == .success
+            ? nil
+            : "restauration impossible"
     }
 
     private static func frontmostWindow(forPID pid: pid_t) -> AXUIElement? {
@@ -113,7 +135,7 @@ struct AppLifecycleController {
             return
         }
         let pid = running.processIdentifier
-        DispatchQueue.global(qos: .userInitiated).async {
+        axQueue.async {
             guard let window = frontmostWindow(forPID: pid) else {
                 DispatchQueue.main.async { completion("aucune fenêtre trouvée pour cette app") }
                 return
@@ -129,7 +151,7 @@ struct AppLifecycleController {
             return
         }
         let pid = running.processIdentifier
-        DispatchQueue.global(qos: .userInitiated).async {
+        axQueue.async {
             let axApp = AXUIElementCreateApplication(pid)
             if let minimizedWindow = windows(of: axApp)?.first(where: isMinimized) {
                 AXUIElementSetAttributeValue(minimizedWindow, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
@@ -149,7 +171,7 @@ struct AppLifecycleController {
             return
         }
         let pid = running.processIdentifier
-        DispatchQueue.global(qos: .userInitiated).async {
+        axQueue.async {
             let axApp = AXUIElementCreateApplication(pid)
             let windowList = windows(of: axApp) ?? []
 

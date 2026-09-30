@@ -40,6 +40,8 @@ final class FlickController {
     private let snapPreviewController = SnapPreviewPanelController()
     @ObservationIgnored
     private let dockActionPreviewController = DockActionPreviewPanelController()
+    @ObservationIgnored
+    private let windowActionBadgeController = WindowActionBadgePanelController()
     /// Resolved once at the start of the current gesture. Reused at the end so the preview
     /// and the actually-applied action always agree, even if the cursor drifts mid-swipe.
     @ObservationIgnored
@@ -148,10 +150,20 @@ final class FlickController {
         let magnitude = magnitudeDescription(for: stroke)
         guard let action = GestureClassifier.action(for: stroke, settings: gestureSettings) else {
             snapPreviewController.hide()
+            windowActionBadgeController.hide()
             updateLiveThrottled(target: "Fenêtre", classification: "aucune action — \(magnitude)")
             return
         }
         updateLiveThrottled(target: "Fenêtre", classification: "\(action.description) — \(magnitude)")
+        // Close/minimize/maximize don't resize the window into a region worth previewing
+        // as a rectangle — they get a traffic-light-style badge instead, matching the
+        // ones already used for Dock gestures.
+        if let glyph = windowActionBadge(for: action) {
+            snapPreviewController.hide()
+            windowActionBadgeController.show(glyph: glyph, near: NSEvent.mouseLocation)
+            return
+        }
+        windowActionBadgeController.hide()
         guard let region = WindowSnapper.normalizedRegion(for: action) else {
             snapPreviewController.hide()
             return
@@ -159,9 +171,28 @@ final class FlickController {
         snapPreviewController.show(region: region, near: NSEvent.mouseLocation)
     }
 
+    /// The three traffic-light actions get a custom badge (see `Assets.xcassets/Actions`);
+    /// the half/quarter snap regions keep the rectangle mini-preview instead, which already
+    /// conveys their target region clearly.
+    private func windowActionBadge(for action: SnapAction) -> ActionBadgeView.Glyph? {
+        switch action {
+        case .close: return .badge(assetName: "fermer")
+        case .maximize: return .badge(assetName: "agrandir")
+        case .minimize: return .badge(assetName: "reduire")
+        default: return nil
+        }
+    }
+
     private func updateDockPreview(stroke: GestureStroke, item: DockItemLocator.Located) {
         snapPreviewController.hide()
+        windowActionBadgeController.hide()
         let magnitude = magnitudeDescription(for: stroke)
+
+        if item.kind == .minimizedWindow {
+            updateMinimizedWindowPreview(stroke: stroke, item: item, magnitude: magnitude)
+            return
+        }
+
         let targetDescription = "Dock : \(item.displayName.isEmpty ? "?" : item.displayName)"
         guard let action = DockGestureClassifier.action(for: stroke, settings: gestureSettings) else {
             dockActionPreviewController.hide()
@@ -170,10 +201,28 @@ final class FlickController {
         }
         let isRunning = AppLifecycleController.isRunning(item)
         updateLiveThrottled(target: targetDescription, classification: "\(action.description(isRunning: isRunning)) — \(magnitude)")
-        let icon = dockPreviewIcon(for: action, item: item)
         dockActionPreviewController.show(
-            systemImage: icon.image, tint: icon.tint,
-            above: ScreenGeometry.appKitRect(fromQuartz: item.frame)
+            glyph: dockPreviewIcon(for: action, isRunning: isRunning),
+            near: ScreenGeometry.appKitRect(fromQuartz: item.frame)
+        )
+    }
+
+    /// A minimized-window Dock thumbnail (the section right before the Trash) only
+    /// supports one gesture — swipe up to restore it, the same `AXPress` a click sends.
+    /// Accessibility gives no way to resolve which app a thumbnail belongs to (see
+    /// `DockItemLocator.Kind`), so unlike a regular app icon, nothing else (quit, cycle
+    /// windows...) can be driven reliably from here.
+    private func updateMinimizedWindowPreview(stroke: GestureStroke, item: DockItemLocator.Located, magnitude: String) {
+        let targetDescription = "Fenêtre réduite : \(item.displayName.isEmpty ? "?" : item.displayName)"
+        guard DockGestureClassifier.action(for: stroke, settings: gestureSettings) == .unminimize else {
+            dockActionPreviewController.hide()
+            updateLiveThrottled(target: targetDescription, classification: "aucune action — \(magnitude)")
+            return
+        }
+        updateLiveThrottled(target: targetDescription, classification: "Rouvrir — \(magnitude)")
+        dockActionPreviewController.show(
+            glyph: .symbol(name: "plus", tint: .yellow),
+            near: ScreenGeometry.appKitRect(fromQuartz: item.frame)
         )
     }
 
@@ -193,6 +242,7 @@ final class FlickController {
     private func hideAllPreviews() {
         snapPreviewController.hide()
         dockActionPreviewController.hide()
+        windowActionBadgeController.hide()
     }
 
     // MARK: - Applying on release
@@ -233,6 +283,10 @@ final class FlickController {
             activityLog.record("Geste ignoré (trop court)")
             return
         }
+        if item.kind == .minimizedWindow {
+            applyMinimizedWindowAction(action, item: item)
+            return
+        }
         let name = item.displayName.isEmpty ? "L'app" : item.displayName
         let wasRunning = AppLifecycleController.isRunning(item)
         // Called on main, as `AppLifecycleController.apply` expects: it resolves the
@@ -245,6 +299,19 @@ final class FlickController {
         }
     }
 
+    /// Only `.unminimize` (swipe up) does anything for a minimized-window Dock thumbnail —
+    /// see `updateMinimizedWindowPreview`. Every other classified gesture is logged as
+    /// ignored instead of silently doing nothing, so it's diagnosable from the panel.
+    private func applyMinimizedWindowAction(_ action: DockAction, item: DockItemLocator.Located) {
+        let name = item.displayName.isEmpty ? "Cette fenêtre" : item.displayName
+        guard action == .unminimize else {
+            activityLog.record("\(name) → geste ignoré (seul glisser vers le haut rouvre une fenêtre réduite)")
+            return
+        }
+        let failure = AppLifecycleController.restore(item)
+        activityLog.record(logLine(name, "Rouvrir", failure: failure))
+    }
+
     private func logLine(_ subject: String, _ actionDescription: String, failure: String?) -> String {
         guard let failure else { return "\(subject) → \(actionDescription)" }
         return "\(subject) → \(actionDescription) — échec (\(failure))"
@@ -252,24 +319,29 @@ final class FlickController {
 
     // MARK: - Dock action icon
 
-    /// Big colored circle + glyph, mirroring macOS's own traffic-light icons (×, −, ⤢)
-    /// instead of a text pill.
-    private func dockPreviewIcon(for action: DockAction, item: DockItemLocator.Located) -> (image: String, tint: Color) {
-        let isRunning = AppLifecycleController.isRunning(item)
-
+    /// Mirrors macOS's own traffic-light icons (×, −, ⤢) instead of a text pill.
+    /// `isRunning` is passed in rather than recomputed here — the caller already resolved
+    /// it once for the log line, and this runs on every gesture update (up to 120×/second
+    /// while a Dock swipe is in progress), so recomputing it via a second
+    /// `NSWorkspace.runningApplications` scan per frame would double that cost.
+    private func dockPreviewIcon(for action: DockAction, isRunning: Bool) -> ActionBadgeView.Glyph {
         switch action {
         case .quit:
-            return ("xmark", .red)
+            return .badge(assetName: "quitter")
         case .newWindow:
-            return isRunning ? ("arrow.up.left.and.arrow.down.right", .green) : ("questionmark", .secondary)
+            return isRunning
+                ? .badge(assetName: "agrandir")
+                : .symbol(name: "questionmark", tint: .secondary)
         case .minimizeFrontmost:
-            return ("minus", .yellow)
+            return .badge(assetName: "reduire")
         case .unminimize:
-            return isRunning ? ("plus", .yellow) : ("questionmark", .secondary)
+            return isRunning
+                ? .symbol(name: "plus", tint: .yellow)
+                : .symbol(name: "questionmark", tint: .secondary)
         case .cycleNext:
-            return ("arrow.right", .accentColor)
+            return .symbol(name: "arrow.right", tint: .accentColor)
         case .cyclePrevious:
-            return ("arrow.left", .accentColor)
+            return .symbol(name: "arrow.left", tint: .accentColor)
         }
     }
 }

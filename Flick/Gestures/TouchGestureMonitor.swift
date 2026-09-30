@@ -197,12 +197,17 @@ final class TouchGestureMonitor {
             handleScrollWheel(event)
         case .swipe:
             // Discrete three-finger swipe: no phase stream, so it's a complete gesture
-            // in a single event.
+            // in a single event. Guarded against an already-active stroke — trackpad
+            // hardware can emit a stray `.swipe` event while a two-finger scroll-phase
+            // gesture or a pinch is genuinely still in progress, and unconditionally
+            // resetting `stroke`/`isStrokeActive` here would clobber that gesture's state
+            // mid-flight (the rest of its `.changed`/`.ended` events would then be
+            // silently dropped by the `isStrokeActive` guards below).
+            guard !isStrokeActive else { return }
             let location = NSEvent.mouseLocation
             stroke.begin(touchCount: 3, at: location, kind: .translation)
             onStrokeBegan?(location)
             stroke.accumulate(dx: event.deltaX, dy: event.deltaY)
-            isStrokeActive = false
             onStrokeEnded?(stroke)
             stroke.end()
         default:

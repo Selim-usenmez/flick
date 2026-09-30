@@ -54,6 +54,14 @@ struct WindowSnapper {
         }
     }
 
+    /// Serial, not concurrent: keeps window actions applied in the exact order their
+    /// gestures completed in. A concurrent queue let two rapid, back-to-back snaps (e.g.
+    /// a quick double-swipe) run their Accessibility calls interleaved instead of one
+    /// after the other — occasionally landing the window in the first action's target
+    /// frame instead of the second's, because the two `setPosition`/`setSize` sequences
+    /// raced each other.
+    private static let axQueue = DispatchQueue(label: "com.flick.windowsnapper.ax")
+
     /// Every branch here ends up making a synchronous, cross-process Accessibility call
     /// into the target window's own app. If that app is busy or unresponsive, the call
     /// blocks until it isn't — so this always runs off the main thread, or a slow/hung
@@ -65,7 +73,7 @@ struct WindowSnapper {
         to located: WindowLocator.Located,
         completion: @escaping (String?) -> Void = { _ in }
     ) {
-        DispatchQueue.global(qos: .userInitiated).async {
+        axQueue.async {
             let failure = performApply(action, to: located)
             DispatchQueue.main.async { completion(failure) }
         }

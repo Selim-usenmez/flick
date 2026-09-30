@@ -5,12 +5,26 @@ import ApplicationServices
 /// Accessibility API on the Dock process itself (`com.apple.dock`) rather than anything in
 /// this app's own process.
 struct DockItemLocator {
+    /// The Dock hosts two different kinds of gesture-able item: a running/launchable app's
+    /// own icon, and — in the section right before the Trash — a thumbnail representing one
+    /// specific minimized window. They need different handling: an app item can be resolved
+    /// to an `NSRunningApplication` (`AXURL` gives its bundle); a minimized-window item
+    /// can't be — it exposes no `AXURL`, and its `AXTopLevelUIElement` resolves to the Dock
+    /// process itself, not to the window's owning app (confirmed empirically, since this
+    /// isn't documented anywhere). Its only reliable action is `AXPress`, exactly what a
+    /// real click does — restore that exact window.
+    enum Kind {
+        case application
+        case minimizedWindow
+    }
+
     struct Located {
         let axItem: AXUIElement
         /// Icon frame in Quartz global coordinates — same space as `WindowLocator`.
         let frame: CGRect
         let displayName: String
         let bundleURL: URL?
+        let kind: Kind
     }
 
     /// Extra margin around each icon's hit box — Dock icons are small and packed tightly.
@@ -26,7 +40,7 @@ struct DockItemLocator {
         let quartzPoint = ScreenGeometry.quartzPoint(fromAppKit: point)
 
         for item in items {
-            guard isApplicationItem(item),
+            guard let kind = kind(of: item),
                   let frame = WindowLocator.frame(of: item),
                   frame.insetBy(dx: -hitTolerance, dy: -hitTolerance).contains(quartzPoint)
             else { continue }
@@ -35,7 +49,8 @@ struct DockItemLocator {
                 axItem: item,
                 frame: frame,
                 displayName: title(of: item) ?? "",
-                bundleURL: url(of: item)
+                bundleURL: url(of: item),
+                kind: kind
             )
         }
         return nil
@@ -65,12 +80,16 @@ struct DockItemLocator {
         return items
     }
 
-    private static func isApplicationItem(_ item: AXUIElement) -> Bool {
+    private static func kind(of item: AXUIElement) -> Kind? {
         var subroleRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(item, kAXSubroleAttribute as CFString, &subroleRef) == .success,
               let subrole = subroleRef as? String
-        else { return false }
-        return subrole == "AXApplicationDockItem"
+        else { return nil }
+        switch subrole {
+        case "AXApplicationDockItem": return .application
+        case "AXMinimizedWindowDockItem": return .minimizedWindow
+        default: return nil
+        }
     }
 
     private static func title(of item: AXUIElement) -> String? {
@@ -80,6 +99,8 @@ struct DockItemLocator {
     }
 
     /// Application Dock items expose the on-disk location of the app bundle via `AXURL`.
+    /// Minimized-window items don't (there's genuinely no value — `AXUIElementCopyAttributeValue`
+    /// returns `.noValue` for it, not just an empty result), so this returns `nil` for those.
     private static func url(of item: AXUIElement) -> URL? {
         var urlRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(item, kAXURLAttribute as CFString, &urlRef) == .success else { return nil }
