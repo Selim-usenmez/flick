@@ -6,6 +6,18 @@
         <description>Mises à jour de Flick</description>
         <language>fr</language>
         <item>
+            <title>Version 3</title>
+            <pubDate>Thu, 15 Oct 2026 20:42:00 +0200</pubDate>
+            <sparkle:version>6</sparkle:version>
+            <sparkle:shortVersionString>3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.3</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/Selim-usenmez/flick/releases/download/v3/Flick.zip"
+                sparkle:edSignature="TyrhYm1qXIFN+xOoE87Rs2MpSVX5jxDXjMN3Nj5277ZPHo4mgLJhEHRJergHFT1xV3IduYySbM4segG5T4zoBg=="
+                length="1600570"
+                type="application/octet-stream" />
+        </item>
+        <item>
             <title>Version 2</title>
             <pubDate>Wed, 30 Sep 2026 16:45:22 +0200</pubDate>
             <sparkle:version>5</sparkle:version>
