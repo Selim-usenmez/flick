@@ -48,13 +48,29 @@ final class TouchGestureMonitor {
 
     private var globalMonitor: Any?
     private var localMonitor: Any?
-    private var lastPinchDistance: CGFloat?
-    /// Distance-delta accumulated *before* committing to a magnify-kind stroke — see
-    /// `handleMultitouchFrame`.
-    private var pendingPinchDelta: CGFloat = 0
-    /// Consecutive multitouch frames in a row that didn't report exactly two touching
-    /// fingers — see `nonPinchFrameGrace`.
-    private var consecutiveNonPinchFrames = 0
+    /// Raw inter-finger-distance tracking, one entry per physical multitouch device
+    /// (keyed by the `MTDeviceRef` `MultitouchSupport` tags each frame with). A Mac can
+    /// have more than one such device active at once — a MacBook's built-in trackpad plus
+    /// a Bluetooth Magic Trackpad or Magic Mouse, say — and their frames are separate,
+    /// unrelated streams; sharing one scalar distance/delta between them would let an
+    /// unrelated device's frame land in between two frames from the real one, corrupting
+    /// the delta with a jump that has nothing to do with either device's actual motion.
+    private var pinchTrackingByDevice: [UnsafeMutableRawPointer: PinchTrackingState] = [:]
+    /// Which device's frames committed the currently-active magnify stroke, if any — once
+    /// one device has committed to a pinch, a second device reporting its own incidental
+    /// two-finger contact (e.g. a hand resting on a nearby Magic Mouse while the real pinch
+    /// happens on the trackpad) must not be able to inject its delta into that same stroke.
+    private var activeMagnifyDevice: UnsafeMutableRawPointer?
+
+    private struct PinchTrackingState {
+        var lastDistance: CGFloat?
+        /// Distance-delta accumulated *before* committing to a magnify-kind stroke — see
+        /// `handleMultitouchFrame`.
+        var pendingDelta: CGFloat = 0
+        /// Consecutive multitouch frames in a row that didn't report exactly two touching
+        /// fingers — see `nonPinchFrameGrace`.
+        var consecutiveNonPinchFrames = 0
+    }
 
     @ObservationIgnored private var rawMultitouchFrameCount = 0
     @ObservationIgnored private var lastDiagnosticFlushTime: CFAbsoluteTime = 0
@@ -98,9 +114,9 @@ final class TouchGestureMonitor {
             return event
         }
 
-        MultitouchSupport.shared.onFrame = { [weak self] fingers in
+        MultitouchSupport.shared.onFrame = { [weak self] device, fingers in
             DispatchQueue.main.async {
-                self?.handleMultitouchFrame(fingers)
+                self?.handleMultitouchFrame(fingers, device: device)
             }
         }
         MultitouchSupport.shared.start()
@@ -117,9 +133,8 @@ final class TouchGestureMonitor {
         MultitouchSupport.shared.stop()
         MultitouchSupport.shared.onFrame = nil
         isMultitouchActive = false
-        lastPinchDistance = nil
-        pendingPinchDelta = 0
-        consecutiveNonPinchFrames = 0
+        pinchTrackingByDevice.removeAll()
+        activeMagnifyDevice = nil
         isMonitoring = false
         isStrokeActive = false
         stroke.reset()
@@ -148,43 +163,50 @@ final class TouchGestureMonitor {
     /// moved enough to look deliberately like a pinch. That also naturally loses any race
     /// against `.scrollWheel`'s own `.began`, which fires almost immediately on contact —
     /// once that's claimed `isStrokeActive`, `handleMagnifyDelta` backs off on its own.
-    private func handleMultitouchFrame(_ fingers: [MTFinger]) {
+    private func handleMultitouchFrame(_ fingers: [MTFinger], device: UnsafeMutableRawPointer) {
         rawMultitouchFrameCount += 1
         let touching = fingers.filter { $0.size > Self.minimumFingerSize }
 
+        var state = pinchTrackingByDevice[device] ?? PinchTrackingState()
+        defer { pinchTrackingByDevice[device] = state }
+
         guard touching.count == 2 else {
             flushDiagnostics(tap: "\(touching.count) doigt(s) au contact")
-            consecutiveNonPinchFrames += 1
-            if lastPinchDistance != nil, consecutiveNonPinchFrames >= Self.nonPinchFrameGrace {
-                lastPinchDistance = nil
-                pendingPinchDelta = 0
-                endMagnifyStroke()
+            state.consecutiveNonPinchFrames += 1
+            if state.lastDistance != nil, state.consecutiveNonPinchFrames >= Self.nonPinchFrameGrace {
+                state.lastDistance = nil
+                state.pendingDelta = 0
+                if device == activeMagnifyDevice { endMagnifyStroke() }
             }
             return
         }
-        consecutiveNonPinchFrames = 0
+        state.consecutiveNonPinchFrames = 0
 
         let dx = CGFloat(touching[0].normalizedX - touching[1].normalizedX)
         let dy = CGFloat(touching[0].normalizedY - touching[1].normalizedY)
         let distance = (dx * dx + dy * dy).squareRoot()
         flushDiagnostics(tap: String(format: "2 doigts, distance %.3f", distance))
 
-        guard let last = lastPinchDistance else {
-            lastPinchDistance = distance
+        guard let last = state.lastDistance else {
+            state.lastDistance = distance
             return
         }
         let delta = distance - last
-        lastPinchDistance = distance
+        state.lastDistance = distance
 
         if isStrokeActive {
+            // Only the device that committed this magnify stroke may keep driving it —
+            // see `activeMagnifyDevice`.
+            guard device == activeMagnifyDevice else { return }
             handleMagnifyDelta(delta, at: NSEvent.mouseLocation)
             return
         }
 
-        pendingPinchDelta += delta
-        if abs(pendingPinchDelta) >= Self.pinchCommitThreshold {
-            let committed = pendingPinchDelta
-            pendingPinchDelta = 0
+        state.pendingDelta += delta
+        if abs(state.pendingDelta) >= Self.pinchCommitThreshold {
+            let committed = state.pendingDelta
+            state.pendingDelta = 0
+            activeMagnifyDevice = device
             handleMagnifyDelta(committed, at: NSEvent.mouseLocation)
         }
     }
@@ -261,6 +283,7 @@ final class TouchGestureMonitor {
     private func endMagnifyStroke() {
         guard isStrokeActive, stroke.kind == .magnify else { return }
         isStrokeActive = false
+        activeMagnifyDevice = nil
         onStrokeEnded?(stroke)
         stroke.end()
     }

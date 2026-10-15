@@ -40,9 +40,13 @@ struct DockItemLocator {
         let quartzPoint = ScreenGeometry.quartzPoint(fromAppKit: point)
 
         for item in items {
-            guard let kind = kind(of: item),
-                  let frame = WindowLocator.frame(of: item),
-                  frame.insetBy(dx: -hitTolerance, dy: -hitTolerance).contains(quartzPoint)
+            // Frame first, kind second: `frame(of:)` is one batched Accessibility round
+            // trip, so checking it first means a miss (the overwhelming majority of Dock
+            // icons on any given gesture) only costs that one call instead of also paying
+            // for `kind(of:)`'s separate round trip before being rejected.
+            guard let frame = WindowLocator.frame(of: item),
+                  frame.insetBy(dx: -hitTolerance, dy: -hitTolerance).contains(quartzPoint),
+                  let kind = kind(of: item)
             else { continue }
 
             return Located(

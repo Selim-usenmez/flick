@@ -14,6 +14,8 @@ final class GestureSettings {
         static let invertHorizontal = "com.selim.Flick.invertHorizontal"
         static let invertVertical = "com.selim.Flick.invertVertical"
         static let invertPinch = "com.selim.Flick.invertPinch"
+        static let horizontalSplitRatio = "com.selim.Flick.horizontalSplitRatio"
+        static let verticalSplitRatio = "com.selim.Flick.verticalSplitRatio"
     }
 
     /// Minimum swipe travel, in points, before it counts as intentional rather than noise.
@@ -48,6 +50,17 @@ final class GestureSettings {
         didSet { UserDefaults.standard.set(invertPinch, forKey: Key.invertPinch) }
     }
 
+    /// Where the left/right half-split divider falls, as a fraction of screen width
+    /// (0...1). 0.5 is an even half. Also anchors quarters' horizontal split. Overridden
+    /// per app once `AdaptiveSnapZones` has learned a different preference for it.
+    var horizontalSplitRatio: CGFloat {
+        didSet { UserDefaults.standard.set(Double(horizontalSplitRatio), forKey: Key.horizontalSplitRatio) }
+    }
+    /// Same idea as `horizontalSplitRatio`, for the top/bottom quarter divider.
+    var verticalSplitRatio: CGFloat {
+        didSet { UserDefaults.standard.set(Double(verticalSplitRatio), forKey: Key.verticalSplitRatio) }
+    }
+
     init() {
         let defaults = UserDefaults.standard
         minimumSwipeDistance = Self.storedDouble(defaults, Key.minimumSwipeDistance, default: 60)
@@ -56,6 +69,8 @@ final class GestureSettings {
         invertHorizontal = Self.storedBool(defaults, Key.invertHorizontal, default: false)
         invertVertical = Self.storedBool(defaults, Key.invertVertical, default: false)
         invertPinch = Self.storedBool(defaults, Key.invertPinch, default: false)
+        horizontalSplitRatio = Self.storedDouble(defaults, Key.horizontalSplitRatio, default: 0.5)
+        verticalSplitRatio = Self.storedDouble(defaults, Key.verticalSplitRatio, default: 0.5)
     }
 
     /// `object(forKey:) as? CGFloat` isn't a reliable cast from the `NSNumber` a stored

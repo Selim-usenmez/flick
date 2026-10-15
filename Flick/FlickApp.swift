@@ -8,11 +8,12 @@ struct FlickApp: App {
         MenuBarExtra("Flick", systemImage: "macwindow.on.rectangle") {
             MenuBarView(controller: controller)
         }
-        .menuBarExtraStyle(.menu)
+        .menuBarExtraStyle(.window)
 
         Window("Réglages Flick", id: PreferencesView.windowID) {
             PreferencesView(controller: controller)
         }
+        .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
     }
 }

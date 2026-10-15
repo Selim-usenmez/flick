@@ -69,9 +69,13 @@ final class MultitouchSupport {
 
     private(set) var isAvailable = false
 
-    /// Called with every finger touching the trackpad in the current frame. Fires on a
-    /// framework-owned background thread — hop to main before touching UI/AppKit state.
-    var onFrame: (([MTFinger]) -> Void)?
+    /// Called with every finger touching a trackpad in the current frame, tagged by which
+    /// physical device reported it. A Mac can have more than one multitouch device active
+    /// at once — a MacBook's built-in trackpad plus a Bluetooth Magic Trackpad or Magic
+    /// Mouse, say — and their frames are separate, unrelated streams; the device identity
+    /// lets a caller avoid merging them into one. Fires on a framework-owned background
+    /// thread — hop to main before touching UI/AppKit state.
+    var onFrame: ((UnsafeMutableRawPointer, [MTFinger]) -> Void)?
 
     private init() {
         guard let handle = dlopen(
@@ -134,9 +138,9 @@ private func multitouchFrameCallback(
     timestamp: Double,
     frame: Int32
 ) -> Int32 {
-    guard let fingersRaw, fingerCount > 0 else { return 0 }
+    guard let device, let fingersRaw, fingerCount > 0 else { return 0 }
     let fingers = fingersRaw.assumingMemoryBound(to: MTFinger.self)
     let buffer = UnsafeBufferPointer(start: fingers, count: Int(fingerCount))
-    MultitouchSupport.shared.onFrame?(Array(buffer))
+    MultitouchSupport.shared.onFrame?(device, Array(buffer))
     return 0
 }

@@ -8,13 +8,22 @@ final class GestureActivityLog {
     private(set) var lastActionDescription: String = "—"
     private(set) var liveTargetDescription: String = "—"
     private(set) var liveClassificationDescription: String = "—"
+    /// Which of the HUD's two gesture grids (if any) the in-progress gesture maps to, and
+    /// which cell within it — lets `GestureHUDView` light up the matching tile live.
+    private(set) var liveGrid: GestureGridKind = .none
+    private(set) var liveCell: GestureGridPosition?
 
     func record(_ description: String) {
         lastActionDescription = description
     }
 
-    func updateLive(target: String, classification: String) {
+    func updateLive(
+        target: String, classification: String,
+        grid: GestureGridKind = .none, cell: GestureGridPosition? = nil
+    ) {
         liveTargetDescription = target
         liveClassificationDescription = classification
+        liveGrid = grid
+        liveCell = cell
     }
 }

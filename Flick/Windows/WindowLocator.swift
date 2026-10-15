@@ -36,21 +36,27 @@ struct WindowLocator {
 
     /// Reads a window's current frame in the same Quartz global coordinate space as
     /// `CGWindowListCopyWindowInfo`.
+    ///
+    /// Position and size are fetched in a single `AXUIElementCopyMultipleAttributeValues`
+    /// round trip rather than two separate `AXUIElementCopyAttributeValue` calls — this
+    /// runs once per candidate window/Dock icon while resolving a gesture's target, and on
+    /// an older/slower Mac each extra Accessibility IPC round trip is enough overhead to
+    /// add a perceptible hitch right as a gesture starts.
     static func frame(of axWindow: AXUIElement) -> CGRect? {
-        var positionRef: CFTypeRef?
-        var sizeRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &positionRef) == .success,
-              AXUIElementCopyAttributeValue(axWindow, kAXSizeAttribute as CFString, &sizeRef) == .success,
-              let positionRef, let sizeRef
+        let attributes = [kAXPositionAttribute, kAXSizeAttribute] as CFArray
+        var valuesRef: CFArray?
+        guard AXUIElementCopyMultipleAttributeValues(axWindow, attributes, [], &valuesRef) == .success,
+              let values = valuesRef as? [AXValue], values.count == 2
         else { return nil }
-
-        let positionValue = positionRef as! AXValue
-        let sizeValue = sizeRef as! AXValue
 
         var position = CGPoint.zero
         var size = CGSize.zero
-        guard AXValueGetValue(positionValue, .cgPoint, &position),
-              AXValueGetValue(sizeValue, .cgSize, &size)
+        // If either attribute failed, its slot holds an AXValue wrapping the AXError
+        // instead of the real value — `AXValueGetValue` simply fails to extract a
+        // `.cgPoint`/`.cgSize` out of that, so this falls through to `nil` the same as
+        // the old two-call version did on a `.success`/`CFTypeRef` mismatch.
+        guard AXValueGetValue(values[0], .cgPoint, &position),
+              AXValueGetValue(values[1], .cgSize, &size)
         else { return nil }
 
         return CGRect(origin: position, size: size)

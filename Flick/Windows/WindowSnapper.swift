@@ -9,6 +9,36 @@ enum SnapAction: Equatable {
     case maximize
     case minimize
     case close
+
+    /// Whether this action's region is anchored to the left edge (`true`) or right edge
+    /// (`false`) of the screen — `nil` for actions with no horizontal-split concept at all.
+    /// Lets `AdaptiveSnapZones` interpret a post-snap manual resize as "the split line
+    /// should be here" regardless of which of the two mirrored actions produced it.
+    var isLeftAligned: Bool? {
+        switch self {
+        case .leftHalf, .topLeftQuarter, .bottomLeftQuarter: return true
+        case .rightHalf, .topRightQuarter, .bottomRightQuarter: return false
+        case .maximize, .minimize, .close: return nil
+        }
+    }
+
+    /// Same idea as `isLeftAligned`, for the top/bottom quarter split.
+    var isTopAligned: Bool? {
+        switch self {
+        case .topLeftQuarter, .topRightQuarter: return true
+        case .bottomLeftQuarter, .bottomRightQuarter: return false
+        case .leftHalf, .rightHalf, .maximize, .minimize, .close: return nil
+        }
+    }
+}
+
+/// Where the half/quarter split lines fall, as fractions of the screen (0...1).
+/// `.even` (0.5/0.5) reproduces the original fixed halves/quarters. `horizontal` moves the
+/// left/right divider; `vertical` moves the top/bottom divider used by quarters.
+struct SnapZoneRatios: Equatable {
+    var horizontal: CGFloat = 0.5
+    var vertical: CGFloat = 0.5
+    static let even = SnapZoneRatios()
 }
 
 /// Applies `SnapAction`s to windows located by `WindowLocator`, computing target frames in
@@ -18,13 +48,15 @@ struct WindowSnapper {
     /// The frame `action` would produce for `located`, in Quartz global coordinates. Used
     /// to draw the live preview overlay while a gesture is in progress. `nil` for actions
     /// that don't resize the window (`.minimize`, `.close`).
-    static func previewFrame(for action: SnapAction, in located: WindowLocator.Located) -> CGRect? {
+    static func previewFrame(
+        for action: SnapAction, in located: WindowLocator.Located, ratios: SnapZoneRatios = .even
+    ) -> CGRect? {
         switch action {
         case .minimize, .close:
             return nil
         default:
             let visible = ScreenGeometry.quartzRect(fromAppKit: located.screen.visibleFrame)
-            return targetFrame(for: action, in: visible)
+            return targetFrame(for: action, in: visible, ratios: ratios)
         }
     }
 
@@ -33,22 +65,24 @@ struct WindowSnapper {
     /// same simple fractions. Used to draw the small cursor-side mini-preview while a
     /// gesture is in progress. `nil` for actions that don't resize the window (`.minimize`,
     /// `.close`), matching `previewFrame`.
-    static func normalizedRegion(for action: SnapAction) -> CGRect? {
+    static func normalizedRegion(for action: SnapAction, ratios: SnapZoneRatios = .even) -> CGRect? {
+        let h = ratios.horizontal
+        let v = ratios.vertical
         switch action {
         case .minimize, .close:
             return nil
         case .leftHalf:
-            return CGRect(x: 0, y: 0, width: 0.5, height: 1)
+            return CGRect(x: 0, y: 0, width: h, height: 1)
         case .rightHalf:
-            return CGRect(x: 0.5, y: 0, width: 0.5, height: 1)
+            return CGRect(x: h, y: 0, width: 1 - h, height: 1)
         case .topLeftQuarter:
-            return CGRect(x: 0, y: 0, width: 0.5, height: 0.5)
+            return CGRect(x: 0, y: 0, width: h, height: v)
         case .topRightQuarter:
-            return CGRect(x: 0.5, y: 0, width: 0.5, height: 0.5)
+            return CGRect(x: h, y: 0, width: 1 - h, height: v)
         case .bottomLeftQuarter:
-            return CGRect(x: 0, y: 0.5, width: 0.5, height: 0.5)
+            return CGRect(x: 0, y: v, width: h, height: 1 - v)
         case .bottomRightQuarter:
-            return CGRect(x: 0.5, y: 0.5, width: 0.5, height: 0.5)
+            return CGRect(x: h, y: v, width: 1 - h, height: 1 - v)
         case .maximize:
             return CGRect(x: 0, y: 0, width: 1, height: 1)
         }
@@ -71,15 +105,16 @@ struct WindowSnapper {
     static func apply(
         _ action: SnapAction,
         to located: WindowLocator.Located,
+        ratios: SnapZoneRatios = .even,
         completion: @escaping (String?) -> Void = { _ in }
     ) {
         axQueue.async {
-            let failure = performApply(action, to: located)
+            let failure = performApply(action, to: located, ratios: ratios)
             DispatchQueue.main.async { completion(failure) }
         }
     }
 
-    private static func performApply(_ action: SnapAction, to located: WindowLocator.Located) -> String? {
+    private static func performApply(_ action: SnapAction, to located: WindowLocator.Located, ratios: SnapZoneRatios) -> String? {
         switch action {
         case .minimize:
             setMinimized(true, on: located.axWindow)
@@ -88,26 +123,32 @@ struct WindowSnapper {
             performClose(on: located.axWindow)
             return nil
         default:
-            guard let target = previewFrame(for: action, in: located) else { return "cible introuvable" }
+            guard let target = previewFrame(for: action, in: located, ratios: ratios) else { return "cible introuvable" }
             set(frame: target, on: located.axWindow)
             return nil
         }
     }
 
-    private static func targetFrame(for action: SnapAction, in visible: CGRect) -> CGRect {
+    private static func targetFrame(for action: SnapAction, in visible: CGRect, ratios: SnapZoneRatios) -> CGRect {
+        let h = ratios.horizontal, v = ratios.vertical
         switch action {
         case .leftHalf:
-            return CGRect(x: visible.minX, y: visible.minY, width: visible.width / 2, height: visible.height)
+            return CGRect(x: visible.minX, y: visible.minY, width: visible.width * h, height: visible.height)
         case .rightHalf:
-            return CGRect(x: visible.midX, y: visible.minY, width: visible.width / 2, height: visible.height)
+            let splitX = visible.minX + visible.width * h
+            return CGRect(x: splitX, y: visible.minY, width: visible.maxX - splitX, height: visible.height)
         case .topLeftQuarter:
-            return CGRect(x: visible.minX, y: visible.minY, width: visible.width / 2, height: visible.height / 2)
+            return CGRect(x: visible.minX, y: visible.minY, width: visible.width * h, height: visible.height * v)
         case .topRightQuarter:
-            return CGRect(x: visible.midX, y: visible.minY, width: visible.width / 2, height: visible.height / 2)
+            let splitX = visible.minX + visible.width * h
+            return CGRect(x: splitX, y: visible.minY, width: visible.maxX - splitX, height: visible.height * v)
         case .bottomLeftQuarter:
-            return CGRect(x: visible.minX, y: visible.midY, width: visible.width / 2, height: visible.height / 2)
+            let splitY = visible.minY + visible.height * v
+            return CGRect(x: visible.minX, y: splitY, width: visible.width * h, height: visible.maxY - splitY)
         case .bottomRightQuarter:
-            return CGRect(x: visible.midX, y: visible.midY, width: visible.width / 2, height: visible.height / 2)
+            let splitX = visible.minX + visible.width * h
+            let splitY = visible.minY + visible.height * v
+            return CGRect(x: splitX, y: splitY, width: visible.maxX - splitX, height: visible.maxY - splitY)
         case .maximize:
             return visible
         case .minimize, .close:

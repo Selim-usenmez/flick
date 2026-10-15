@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Observation
 import Sparkle
 import SwiftUI
@@ -226,11 +227,14 @@ final class FlickController {
         }
     }
 
-    private func updateLiveThrottled(target: String, classification: String) {
+    private func updateLiveThrottled(
+        target: String, classification: String,
+        grid: GestureGridKind = .none, cell: GestureGridPosition? = nil
+    ) {
         let now = CFAbsoluteTimeGetCurrent()
         guard now - lastPreviewUpdateTime >= Self.previewUpdateInterval else { return }
         lastPreviewUpdateTime = now
-        activityLog.updateLive(target: target, classification: classification)
+        activityLog.updateLive(target: target, classification: classification, grid: grid, cell: cell)
     }
 
     private func updateWindowPreview(stroke: GestureStroke, located: WindowLocator.Located) {
@@ -242,30 +246,54 @@ final class FlickController {
             updateLiveThrottled(target: "Fenêtre", classification: "aucune action — \(magnitude)")
             return
         }
-        updateLiveThrottled(target: "Fenêtre", classification: "\(action.description) — \(magnitude)")
-        // Close/minimize/maximize don't resize the window into a region worth previewing
-        // as a rectangle — they get a traffic-light-style badge instead, matching the
-        // ones already used for Dock gestures.
+        updateLiveThrottled(
+            target: "Fenêtre", classification: "\(action.description) — \(magnitude)",
+            grid: .title, cell: gridPosition(for: action)
+        )
+        // Close/minimize don't resize the window into a region worth previewing as a
+        // rectangle — they get a traffic-light-style badge instead, matching the ones
+        // already used for Dock gestures. Maximize falls through to the rectangle path
+        // below instead (see `windowActionBadge`'s doc comment).
         if let glyph = windowActionBadge(for: action) {
             snapPreviewController.hide()
             windowActionBadgeController.show(glyph: glyph, near: NSEvent.mouseLocation)
             return
         }
         windowActionBadgeController.hide()
-        guard let region = WindowSnapper.normalizedRegion(for: action) else {
+        guard let region = WindowSnapper.normalizedRegion(for: action, ratios: effectiveRatios(for: located.axWindow)) else {
             snapPreviewController.hide()
             return
         }
         snapPreviewController.show(region: region, near: NSEvent.mouseLocation)
     }
 
-    /// The three traffic-light actions get a custom badge (see `Assets.xcassets/Actions`);
-    /// the half/quarter snap regions keep the rectangle mini-preview instead, which already
-    /// conveys their target region clearly.
+    /// `GestureSettings`' generic split, overridden per app wherever `AdaptiveSnapZones`
+    /// has learned something more specific — used for both the live preview (so it matches
+    /// where the window will actually land) and the real `WindowSnapper.apply` call.
+    private func effectiveRatios(for axWindow: AXUIElement) -> SnapZoneRatios {
+        let defaults = SnapZoneRatios(
+            horizontal: gestureSettings.horizontalSplitRatio,
+            vertical: gestureSettings.verticalSplitRatio
+        )
+        guard let bundleID = bundleIdentifier(of: axWindow) else { return defaults }
+        return AdaptiveSnapZones.shared.ratios(for: bundleID, defaults: defaults)
+    }
+
+    private func bundleIdentifier(of axWindow: AXUIElement) -> String? {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(axWindow, &pid) == .success else { return nil }
+        return NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+    }
+
+    /// Close and minimize don't resize the window into a region worth previewing, so they
+    /// get a custom badge instead (see `Assets.xcassets/Actions`). Maximize **does** have a
+    /// well-defined target region (the full screen — see `WindowSnapper.normalizedRegion`),
+    /// so unlike the other two it keeps the same rectangle mini-preview as the half/quarter
+    /// snaps rather than the green badge, to actually show the full-screen region filling in
+    /// light blue instead of just a generic "this will maximize" icon.
     private func windowActionBadge(for action: SnapAction) -> ActionBadgeView.Glyph? {
         switch action {
         case .close: return .badge(assetName: "fermer")
-        case .maximize: return .badge(assetName: "agrandir")
         case .minimize: return .badge(assetName: "reduire")
         default: return nil
         }
@@ -288,7 +316,10 @@ final class FlickController {
             return
         }
         let isRunning = AppLifecycleController.isRunning(item)
-        updateLiveThrottled(target: targetDescription, classification: "\(action.description(isRunning: isRunning)) — \(magnitude)")
+        updateLiveThrottled(
+            target: targetDescription, classification: "\(action.description(isRunning: isRunning)) — \(magnitude)",
+            grid: .dock, cell: gridPosition(for: action)
+        )
         dockActionPreviewController.show(
             glyph: dockPreviewIcon(for: action, isRunning: isRunning),
             near: ScreenGeometry.appKitRect(fromQuartz: item.frame)
@@ -360,10 +391,23 @@ final class FlickController {
         // `WindowSnapper.apply` itself hops to a background queue for the actual
         // Accessibility calls (a slow/unresponsive target app would otherwise freeze
         // Flick's own UI) and calls back on main.
-        WindowSnapper.apply(action, to: located) { [weak self] failure in
+        WindowSnapper.apply(action, to: located, ratios: effectiveRatios(for: located.axWindow)) { [weak self] failure in
             guard let self else { return }
             self.activityLog.record(self.logLine("Fenêtre", action.description, failure: failure))
+            if failure == nil {
+                self.armAdaptiveWatcher(for: action, window: located.axWindow)
+            }
         }
+    }
+
+    /// Starts `AdaptiveSnapZones` watching the just-snapped window for a few seconds, in
+    /// case the user manually corrects it right after — see that type's doc comment.
+    private func armAdaptiveWatcher(for action: SnapAction, window axWindow: AXUIElement) {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(axWindow, &pid) == .success,
+              let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+        else { return }
+        AdaptiveSnapZones.shared.observeForAdjustment(after: action, window: axWindow, pid: pid, bundleID: bundleID)
     }
 
     private func applyDockAction(stroke: GestureStroke, item: DockItemLocator.Located) {
@@ -430,6 +474,36 @@ final class FlickController {
             return .symbol(name: "arrow.right", tint: .accentColor)
         case .cyclePrevious:
             return .symbol(name: "arrow.left", tint: .accentColor)
+        }
+    }
+
+    // MARK: - HUD active-cell mapping
+
+    /// Where a resolved window action lights up in the title-bar `GestureGrid` — `nil` for
+    /// `.close`, which has no dedicated cell (only the caption below the grid mentions it).
+    private func gridPosition(for action: SnapAction) -> GestureGridPosition? {
+        switch action {
+        case .leftHalf: return .left
+        case .rightHalf: return .right
+        case .topLeftQuarter: return .topLeft
+        case .topRightQuarter: return .topRight
+        case .bottomLeftQuarter: return .bottomLeft
+        case .bottomRightQuarter: return .bottomRight
+        case .maximize: return .top
+        case .minimize: return .bottom
+        case .close: return nil
+        }
+    }
+
+    /// Where a resolved Dock action lights up in the Dock `GestureGrid` — `nil` for the
+    /// pinch-only actions (`.newWindow`/`.minimizeFrontmost`), which have no dedicated cell.
+    private func gridPosition(for action: DockAction) -> GestureGridPosition? {
+        switch action {
+        case .quit: return .bottom
+        case .unminimize: return .top
+        case .cycleNext: return .right
+        case .cyclePrevious: return .left
+        case .newWindow, .minimizeFrontmost: return nil
         }
     }
 }

@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// A small "mini screen" preview shown near the cursor while a window-snap gesture is in
-/// progress — a frosted-glass outline of the screen with the target snap region
-/// highlighted, mirroring Swish's floating cursor-side preview instead of a full-size
-/// overlay on the actual target region.
+/// A tiny "mini screen" preview shown near the cursor while a window-snap gesture is in
+/// progress — just a translucent screen silhouette with the target snap region filled in
+/// solid accent, no glass frame or border. Deliberately minimal and small (30×22) so it
+/// reads as a quick confirmation, not a focal overlay.
 struct SnapPreviewView: View {
     /// Target region as a fraction (0...1) of the screen's visible frame, top-left origin.
     /// Fixed-size, geometry-only content (no text, no dynamic intrinsic size) by design —
@@ -11,33 +11,39 @@ struct SnapPreviewView: View {
     /// drift from its panel's fixed frame is how these panels have crashed before.
     let region: CGRect
 
-    static let size = CGSize(width: 160, height: 100)
-    private static let inset: CGFloat = 7
+    static let size = CGSize(width: 30, height: 22)
+    /// Padding around the mini-screen so the target region's soft shadow has room to
+    /// render without being clipped by the hosting panel's bounds (which is sized to
+    /// `panelSize`, not `size`).
+    private static let shadowMargin: CGFloat = 8
+    static let panelSize = CGSize(width: size.width + shadowMargin * 2, height: size.height + shadowMargin * 2)
 
     var body: some View {
-        let usableWidth = Self.size.width - Self.inset * 2
-        let usableHeight = Self.size.height - Self.inset * 2
+        let x = Self.inset(origin: region.minX, size: region.width, dimension: Self.size.width)
+        let y = Self.inset(origin: region.minY, size: region.height, dimension: Self.size.height)
 
         ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: 16)
-                .fill(.ultraThinMaterial)
-            RoundedRectangle(cornerRadius: 16)
-                .fill(.black.opacity(0.18))
-            RoundedRectangle(cornerRadius: 16)
-                .strokeBorder(.white.opacity(0.22), lineWidth: 1)
-
             RoundedRectangle(cornerRadius: 7)
-                .fill(
-                    LinearGradient(colors: [.cyan, .blue], startPoint: .topLeading, endPoint: .bottomTrailing)
-                )
-                .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(.white.opacity(0.55), lineWidth: 1))
-                .shadow(color: .blue.opacity(0.6), radius: 8, y: 3)
-                .frame(width: usableWidth * region.width, height: usableHeight * region.height)
-                .offset(x: Self.inset + usableWidth * region.minX, y: Self.inset + usableHeight * region.minY)
-                .animation(.spring(response: 0.25, dampingFraction: 0.75), value: region)
+                .fill(FlickTheme.snap.opacity(0.20))
+
+            RoundedRectangle(cornerRadius: 6)
+                .fill(FlickTheme.snap)
+                .shadow(color: FlickTheme.snap.opacity(0.35), radius: 4, y: 2)
+                .frame(width: x.size, height: y.size)
+                .offset(x: x.origin, y: y.origin)
+                .animation(FlickTheme.spring, value: region)
         }
         .frame(width: Self.size.width, height: Self.size.height)
-        .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
+        .padding(Self.shadowMargin)
+    }
+
+    /// A 1pt gap is kept at every internal dividing line (half/quarter boundaries) so
+    /// adjacent regions never visually touch, while regions against a screen edge stay
+    /// flush with it.
+    private static func inset(origin: CGFloat, size: CGFloat, dimension: CGFloat) -> (origin: CGFloat, size: CGFloat) {
+        let o = origin * dimension + (origin > 0 ? 1 : 0)
+        let s = size * dimension - (size < 1 ? 1 : 0)
+        return (o, s)
     }
 }
 

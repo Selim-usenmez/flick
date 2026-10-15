@@ -11,7 +11,7 @@ final class SnapPreviewPanelController {
     private var lastRegion: CGRect?
     private var isVisible = false
 
-    private static let size = SnapPreviewView.size
+    private static let size = SnapPreviewView.panelSize
     private static let cursorGap: CGFloat = 20
 
     /// - Parameters:
