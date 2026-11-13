@@ -19,7 +19,7 @@ struct AppLifecycleController {
     /// overlapping `cycle` calls could both read the *same* stale focused window and
     /// advance to the same next window instead of two windows forward, a swipe silently
     /// "eaten" by the one racing ahead of it.
-    private static let axQueue = DispatchQueue(label: "com.flick.applifecycle.ax")
+    private static let axQueue = DispatchQueue(label: "com.flick.applifecycle.ax", qos: .userInitiated)
 
     /// `nil` on success, else a short reason — surfaced in the control panel's activity
     /// log. Delivered on the main thread regardless of which path handled `action`.
@@ -50,11 +50,14 @@ struct AppLifecycleController {
     /// first: minimized-window Dock items expose no `AXURL`, and their `AXTopLevelUIElement`
     /// resolves to the Dock process itself, not the window's app (see `DockItemLocator.Kind`).
     /// Pressing the Dock's own proxy element is the only reliable way to target this exact
-    /// window, so this is main-thread-only, like the other `NSWorkspace`-free actions above.
-    static func restore(_ item: DockItemLocator.Located) -> String? {
-        AXUIElementPerformAction(item.axItem, kAXPressAction as CFString) == .success
-            ? nil
-            : "restauration impossible"
+    /// window. Like every other Accessibility call here, it runs off the main thread.
+    static func restore(_ item: DockItemLocator.Located, completion: @escaping (String?) -> Void) {
+        axQueue.async {
+            let failure: String? = AXUIElementPerformAction(item.axItem, kAXPressAction as CFString) == .success
+                ? nil
+                : "restauration impossible"
+            DispatchQueue.main.async { completion(failure) }
+        }
     }
 
     private static func frontmostWindow(forPID pid: pid_t) -> AXUIElement? {
@@ -95,7 +98,7 @@ struct AppLifecycleController {
         guard let running = runningApplication(for: item) else {
             return "app non lancée — ouvre-la toi-même"
         }
-        running.activate(options: [.activateIgnoringOtherApps])
+        running.activate()
         return nil
     }
 
@@ -107,19 +110,22 @@ struct AppLifecycleController {
         // half-handled — its quit confirmation dialog (if any) stays invisible and the
         // process lingers. Activating first wakes it and matches what quitting from its own
         // frontmost menu bar already does correctly.
-        running.activate(options: [.activateIgnoringOtherApps])
+        running.activate()
         running.terminate()
         return nil
     }
 
     /// Activates the app, then sends it a ⌘N keystroke — there's no generic Accessibility
     /// action for "new window/tab", so this mirrors what the keyboard shortcut itself does.
+    /// The keystroke waits for the activation to actually land (see
+    /// `KeystrokeSender.activate`), or it would hit whichever app was still frontmost.
     private static func newWindow(_ item: DockItemLocator.Located) -> String? {
         guard let running = runningApplication(for: item) else {
             return launch(item) // Not running: launching already opens a window.
         }
-        running.activate(options: [.activateIgnoringOtherApps])
-        KeystrokeSender.sendCommandN()
+        KeystrokeSender.activate(running) {
+            KeystrokeSender.sendCommandN()
+        }
         return nil
     }
 
@@ -157,7 +163,7 @@ struct AppLifecycleController {
                 AXUIElementSetAttributeValue(minimizedWindow, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
             }
             DispatchQueue.main.async {
-                running.activate(options: [.activateIgnoringOtherApps])
+                running.activate()
                 completion(nil)
             }
         }
@@ -177,7 +183,7 @@ struct AppLifecycleController {
 
             guard windowList.count > 1 else {
                 DispatchQueue.main.async {
-                    running.activate(options: [.activateIgnoringOtherApps])
+                    running.activate()
                     completion(windowList.isEmpty ? "une seule fenêtre (ou aucune) à cycler" : nil)
                 }
                 return
@@ -193,16 +199,21 @@ struct AppLifecycleController {
             AXUIElementPerformAction(windowList[nextIndex], kAXRaiseAction as CFString)
 
             DispatchQueue.main.async {
-                running.activate(options: [.activateIgnoringOtherApps])
+                running.activate()
                 completion(nil)
             }
         }
     }
 
+    /// Matches by bundle location when the Dock item exposes one, by name otherwise.
+    /// Compared as standardized *paths*, not `URL` values: the Dock's `AXURL` and
+    /// `NSRunningApplication.bundleURL` don't agree on a trailing slash, and `URL ==` is a
+    /// plain string comparison that treats those as different apps.
     private static func runningApplication(for item: DockItemLocator.Located) -> NSRunningApplication? {
-        NSWorkspace.shared.runningApplications.first { app in
-            if let bundleURL = item.bundleURL, let appURL = app.bundleURL {
-                return appURL == bundleURL
+        let itemPath = item.bundleURL?.standardizedFileURL.path
+        return NSWorkspace.shared.runningApplications.first { app in
+            if let itemPath, let appPath = app.bundleURL?.standardizedFileURL.path {
+                return appPath == itemPath
             }
             return !item.displayName.isEmpty && app.localizedName == item.displayName
         }

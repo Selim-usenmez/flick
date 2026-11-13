@@ -195,14 +195,18 @@ struct WindowSnapper {
 
         AXUIElementPerformAction(axWindow, kAXRaiseAction as CFString)
         var pid: pid_t = 0
-        if AXUIElementGetPid(axWindow, &pid) == .success {
-            // `performApply` (the only caller) runs this whole function on a background
-            // queue for the AX calls above; NSRunningApplication/.activate() is AppKit,
-            // which isn't safe to call off the main thread, so this specifically hops back.
-            DispatchQueue.main.sync {
-                NSRunningApplication(processIdentifier: pid)?.activate(options: [.activateIgnoringOtherApps])
+        guard AXUIElementGetPid(axWindow, &pid) == .success else { return }
+        // `performApply` (the only caller) runs this whole function on a background queue
+        // for the AX calls above; NSRunningApplication/.activate() is AppKit, which isn't
+        // safe to call off the main thread, so this specifically hops back. The ⌘W is only
+        // posted once the app has actually come to the front (see `KeystrokeSender.activate`)
+        // — posting it right after `activate()` returned used to close a window in whichever
+        // app was *still* frontmost at that instant.
+        DispatchQueue.main.async {
+            guard let app = NSRunningApplication(processIdentifier: pid) else { return }
+            KeystrokeSender.activate(app) {
+                KeystrokeSender.sendCommandW()
             }
         }
-        KeystrokeSender.sendCommandW()
     }
 }

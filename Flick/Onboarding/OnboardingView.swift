@@ -201,6 +201,7 @@ struct OnboardingView: View {
             }
             .frame(maxWidth: 400)
         }
+        .onAppear { controller.launchAtLogin.refresh() }
     }
 
     private var permissionPage: some View {

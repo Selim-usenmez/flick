@@ -40,7 +40,10 @@ private typealias MTContactCallback = @convention(c) (
     MTDeviceRef?, UnsafeMutableRawPointer?, Int32, Double, Int32
 ) -> Int32
 
-private typealias MTDeviceCreateListFn = @convention(c) () -> CFMutableArray?
+// `MTDeviceCreateList` follows the CF "Create rule" (+1 result). Typing the return as
+// `Unmanaged` keeps Swift from inserting its own retain on top of that and makes the
+// ownership explicit — see `start()`.
+private typealias MTDeviceCreateListFn = @convention(c) () -> Unmanaged<CFMutableArray>?
 private typealias MTRegisterContactFrameCallbackFn = @convention(c) (MTDeviceRef?, MTContactCallback?) -> Void
 private typealias MTUnregisterContactFrameCallbackFn = @convention(c) (MTDeviceRef?, MTContactCallback?) -> Void
 private typealias MTDeviceStartFn = @convention(c) (MTDeviceRef?, Int32) -> Void
@@ -65,17 +68,29 @@ final class MultitouchSupport {
     private var unregisterCallback: MTUnregisterContactFrameCallbackFn?
     private var deviceStart: MTDeviceStartFn?
     private var deviceStop: MTDeviceStopFn?
+    /// The array returned by `MTDeviceCreateList` owns the device objects. It's kept alive
+    /// here for exactly as long as those devices are registered/started, and released in
+    /// `stop()` — releasing it earlier would free devices the framework is still
+    /// delivering frames for.
+    private var deviceList: CFMutableArray?
     private var devices: [MTDeviceRef] = []
 
     private(set) var isAvailable = false
+
+    /// Number of devices currently registered and started — `0` when stopped.
+    var activeDeviceCount: Int { devices.count }
 
     /// Called with every finger touching a trackpad in the current frame, tagged by which
     /// physical device reported it. A Mac can have more than one multitouch device active
     /// at once — a MacBook's built-in trackpad plus a Bluetooth Magic Trackpad or Magic
     /// Mouse, say — and their frames are separate, unrelated streams; the device identity
-    /// lets a caller avoid merging them into one. Fires on a framework-owned background
-    /// thread — hop to main before touching UI/AppKit state.
-    var onFrame: ((UnsafeMutableRawPointer, [MTFinger]) -> Void)?
+    /// lets a caller avoid merging them into one.
+    ///
+    /// Fires on a framework-owned background thread, at 60–120Hz while fingers are down.
+    /// The buffer is only valid for the duration of the call — reduce it to whatever small
+    /// value is actually needed *before* hopping to main, instead of copying every finger
+    /// struct into a fresh array per frame.
+    var onFrame: ((UnsafeMutableRawPointer, UnsafeBufferPointer<MTFinger>) -> Void)?
 
     private init() {
         guard let handle = dlopen(
@@ -101,9 +116,10 @@ final class MultitouchSupport {
     func start() {
         guard isAvailable, devices.isEmpty,
               let deviceCreateList, let registerCallback, let deviceStart,
-              let list = deviceCreateList()
+              let list = deviceCreateList()?.takeRetainedValue()
         else { return }
 
+        deviceList = list
         let count = CFArrayGetCount(list)
         for index in 0..<count {
             guard let raw = CFArrayGetValueAtIndex(list, index) else { continue }
@@ -126,6 +142,26 @@ final class MultitouchSupport {
             deviceStop(device)
         }
         devices.removeAll()
+        deviceList = nil
+    }
+
+    /// Tears the device set down and re-enumerates it from scratch. The driver silently
+    /// stops delivering frames to a callback registered before the Mac went to sleep, and
+    /// a Bluetooth trackpad that connects after `start()` is simply never in the list —
+    /// both leave pinch gestures dead until the app is relaunched, unless this runs.
+    func restart() {
+        stop()
+        start()
+    }
+
+    /// `true` if the set of multitouch devices the system currently reports differs in
+    /// size from the one registered at `start()` — a trackpad was plugged/paired or went
+    /// away. Cheap (one CF call), so safe to poll occasionally.
+    func deviceListHasChanged() -> Bool {
+        guard isAvailable, let deviceCreateList,
+              let list = deviceCreateList()?.takeRetainedValue()
+        else { return false }
+        return CFArrayGetCount(list) != devices.count
     }
 }
 
@@ -138,9 +174,15 @@ private func multitouchFrameCallback(
     timestamp: Double,
     frame: Int32
 ) -> Int32 {
-    guard let device, let fingersRaw, fingerCount > 0 else { return 0 }
+    guard let device, let onFrame = MultitouchSupport.shared.onFrame else { return 0 }
+    // A zero-finger frame (all fingers just lifted) carries a null buffer — still worth
+    // reporting, since "no fingers down" is exactly the signal that ends a pinch and
+    // confirms a lost scroll `.ended` really was the end of the gesture.
+    guard let fingersRaw, fingerCount > 0 else {
+        onFrame(device, UnsafeBufferPointer(start: nil, count: 0))
+        return 0
+    }
     let fingers = fingersRaw.assumingMemoryBound(to: MTFinger.self)
-    let buffer = UnsafeBufferPointer(start: fingers, count: Int(fingerCount))
-    MultitouchSupport.shared.onFrame?(device, Array(buffer))
+    onFrame(device, UnsafeBufferPointer(start: fingers, count: Int(fingerCount)))
     return 0
 }

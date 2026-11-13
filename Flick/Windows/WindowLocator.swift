@@ -5,9 +5,16 @@ import ApplicationServices
 /// window's top edge, roughly matching macOS's own traffic-light row. Flick only acts on
 /// gestures that start there, per `TouchGestureMonitor`'s doc comment: doing this over a
 /// window's body would also drive whatever scrolls/zooms in that app.
+///
+/// Every lookup here is a cross-process round trip (the window server, then the target
+/// app's Accessibility server). `GestureTargetResolver` runs them off the main thread —
+/// nothing in this type touches AppKit state beyond the `NSScreen` handed in by the caller.
 struct WindowLocator {
     struct Located {
         let axWindow: AXUIElement
+        /// Owner process — lets callers resolve the app (bundle ID, `NSRunningApplication`)
+        /// without another Accessibility round trip.
+        let pid: pid_t
         /// Current frame in Quartz (top-left origin) global screen coordinates — the same
         /// space `CGWindowListCopyWindowInfo` and the Accessibility position/size
         /// attributes use.
@@ -17,21 +24,21 @@ struct WindowLocator {
 
     static let titleBarHitHeight: CGFloat = 32
 
-    /// - Parameter point: a point in AppKit screen coordinates (origin bottom-left of the
-    ///   primary screen), e.g. from `NSEvent.mouseLocation`.
-    static func window(atTitleBar point: NSPoint) -> Located? {
-        let quartzPoint = ScreenGeometry.quartzPoint(fromAppKit: point)
-
+    /// - Parameters:
+    ///   - quartzPoint: the gesture's starting point in Quartz global coordinates (see
+    ///     `ScreenGeometry.quartzPoint(fromAppKit:)`).
+    ///   - screen: the screen that point is on, resolved by the caller on the main thread.
+    static func window(atTitleBar quartzPoint: CGPoint, on screen: NSScreen) -> Located? {
         guard let info = frontmostWindowInfo(at: quartzPoint),
               let pidNumber = info[kCGWindowOwnerPID as String] as? Int,
               let windowFrame = boundsRect(from: info)
         else { return nil }
 
         guard quartzPoint.y <= windowFrame.minY + titleBarHitHeight else { return nil }
-        guard let screen = screen(containing: point) else { return nil }
-        guard let axWindow = axWindow(forPID: pid_t(pidNumber), matching: windowFrame) else { return nil }
+        let pid = pid_t(pidNumber)
+        guard let axWindow = axWindow(forPID: pid, matching: windowFrame) else { return nil }
 
-        return Located(axWindow: axWindow, frame: windowFrame, screen: screen)
+        return Located(axWindow: axWindow, pid: pid, frame: windowFrame, screen: screen)
     }
 
     /// Reads a window's current frame in the same Quartz global coordinate space as
@@ -91,10 +98,6 @@ struct WindowLocator {
               let width = bounds["Width"], let height = bounds["Height"]
         else { return nil }
         return CGRect(x: x, y: y, width: width, height: height)
-    }
-
-    private static func screen(containing appKitPoint: NSPoint) -> NSScreen? {
-        NSScreen.screens.first { $0.frame.contains(appKitPoint) }
     }
 
     private static func axWindow(forPID pid: pid_t, matching targetFrame: CGRect) -> AXUIElement? {

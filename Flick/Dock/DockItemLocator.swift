@@ -4,6 +4,10 @@ import ApplicationServices
 /// Finds the Dock icon under a screen point, and the app it represents, using the
 /// Accessibility API on the Dock process itself (`com.apple.dock`) rather than anything in
 /// this app's own process.
+///
+/// Like `WindowLocator`, this is pure Accessibility IPC and is meant to run off the main
+/// thread (see `GestureTargetResolver`); the Dock's PID is handed in by the caller so no
+/// `NSWorkspace` call happens here.
 struct DockItemLocator {
     /// The Dock hosts two different kinds of gesture-able item: a running/launchable app's
     /// own icon, and — in the section right before the Trash — a thumbnail representing one
@@ -30,14 +34,11 @@ struct DockItemLocator {
     /// Extra margin around each icon's hit box — Dock icons are small and packed tightly.
     private static let hitTolerance: CGFloat = 4
 
-    /// - Parameter point: a point in AppKit screen coordinates, e.g. from
-    ///   `NSEvent.mouseLocation`.
-    static func item(at point: NSPoint) -> Located? {
-        guard let dockPID = dockProcessID(),
-              let items = dockItemList(forPID: dockPID)
-        else { return nil }
-
-        let quartzPoint = ScreenGeometry.quartzPoint(fromAppKit: point)
+    /// - Parameters:
+    ///   - quartzPoint: the gesture's starting point in Quartz global coordinates.
+    ///   - dockPID: the Dock process, resolved by the caller (see `dockProcessID()`).
+    static func item(at quartzPoint: CGPoint, dockPID: pid_t) -> Located? {
+        guard let items = dockItemList(forPID: dockPID, containing: quartzPoint) else { return nil }
 
         for item in items {
             // Frame first, kind second: `frame(of:)` is one batched Accessibility round
@@ -60,7 +61,8 @@ struct DockItemLocator {
         return nil
     }
 
-    private static func dockProcessID() -> pid_t? {
+    /// Main-thread helper (it goes through `NSWorkspace`) for the `dockPID` parameter.
+    static func dockProcessID() -> pid_t? {
         NSWorkspace.shared.runningApplications
             .first { $0.bundleIdentifier == "com.apple.dock" }
             .map { pid_t($0.processIdentifier) }
@@ -68,7 +70,12 @@ struct DockItemLocator {
 
     /// The Dock exposes its icons as: application → one `AXList` child → one `AXUIElement`
     /// per icon (apps, folders, minimized windows, the trash...).
-    private static func dockItemList(forPID pid: pid_t) -> [AXUIElement]? {
+    ///
+    /// Returns `nil` early when `point` isn't even inside the list's own frame — this
+    /// lookup runs for every two-finger scroll that starts anywhere on screen, and
+    /// walking 20–40 icons (one round trip each) for the overwhelmingly common case of a
+    /// gesture nowhere near the Dock is wasted work.
+    private static func dockItemList(forPID pid: pid_t, containing point: CGPoint) -> [AXUIElement]? {
         let dockApp = AXUIElementCreateApplication(pid)
 
         var childrenRef: CFTypeRef?
@@ -76,6 +83,11 @@ struct DockItemLocator {
               let children = childrenRef as? [AXUIElement],
               let list = children.first
         else { return nil }
+
+        if let listFrame = WindowLocator.frame(of: list),
+           !listFrame.insetBy(dx: -hitTolerance, dy: -hitTolerance).contains(point) {
+            return nil
+        }
 
         var itemsRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(list, kAXChildrenAttribute as CFString, &itemsRef) == .success,

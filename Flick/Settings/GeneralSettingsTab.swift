@@ -117,6 +117,7 @@ struct GeneralSettingsTab: View {
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 20)
+        .onAppear { controller.launchAtLogin.refresh() }
     }
 }
 

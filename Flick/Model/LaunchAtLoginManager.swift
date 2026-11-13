@@ -34,6 +34,14 @@ final class LaunchAtLoginManager {
         SMAppService.openSystemSettingsLoginItems()
     }
 
+    /// Re-reads the system's answer. Approving (or revoking) the login item happens in
+    /// System Settings, which posts no notification — callers re-check whenever the user
+    /// is likely to have just come back from there (a settings tab appearing, say).
+    func refresh() {
+        let current = LaunchAtLoginManager.currentStatus()
+        if current != status { status = current }
+    }
+
     private static func currentStatus() -> LaunchAtLoginStatus {
         switch SMAppService.mainApp.status {
         case .enabled: return .enabled
